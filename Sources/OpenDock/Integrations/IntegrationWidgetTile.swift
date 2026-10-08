@@ -327,26 +327,56 @@ struct IntegrationWidgetTile:View {
             VStack(alignment:.leading,spacing:5) { HStack { Text(value.title).font(.caption); Spacer(); Text("\(Int(percent))% " + (config["usageDisplay"] == "used" ? "已用":"剩余")).font(.caption.monospacedDigit()) }; if config["aiStyle"] != "numbers" { ProgressView(value:percent,total:100).tint(DockTheme.accent) }; if let reset = value.resetsAt { Text(reset > .now ? "重置 " + reset.formatted(date:.abbreviated,time:.shortened):"重置时间已过，等待供应商新数据").font(.caption2).foregroundStyle(.secondary) } }
         }
     }
+    private func activityTokensLabel(_ records:[AIActivityRecord],tokens:Int64)->String {
+        if !records.isEmpty,records.allSatisfy({ $0.tokenCoverage == "unavailable" }) { return "Tokens 未报告" }
+        var prefix = ""
+        if records.contains(where: \.estimated) { prefix = "≈ " }
+        else if records.contains(where:{ ["partial","unavailable"].contains($0.tokenCoverage ?? "") }) { prefix = "≥ " }
+        return prefix + tokens.formatted() + " tokens"
+    }
+    private func cursorActivityCaption(_ records:[AIActivityRecord])->String {
+        let requests = records.reduce(0.0) { $0 + $1.requests }
+        let costs = records.compactMap(\.costUSD)
+        let requestText:String
+        if records.allSatisfy({ $0.requestsReported == false }) { requestText = "请求单位未报告" }
+        else { requestText = (records.contains(where:{ $0.requestsReported == false }) ? "≥ ":"") + requests.formatted() + " 报告请求单位" }
+        let costText:String
+        if costs.isEmpty { costText = "费用未报告" }
+        else { costText = (records.contains(where:{ $0.costUSD == nil }) ? "≥ ":"") + costs.reduce(0,+).formatted(.currency(code:"USD")) + " 供应商报告费用" }
+        return requestText + " · " + costText
+    }
+    @ViewBuilder private func activityPlot(_ points:[IntegrationPoint])->some View {
+        if !points.isEmpty,config["activityStyle"] != "totals" {
+            Chart(points) { point in
+                if config["activityStyle"] == "sparkline" { LineMark(x:.value("日期",point.date),y:.value("Tokens",point.value)).foregroundStyle(DockTheme.accent) }
+                else { BarMark(x:.value("日期",point.date,unit:.day),y:.value("Tokens",point.value)).foregroundStyle(DockTheme.accent) }
+            }.frame(height:100)
+            if period == .today { Text("近 7 天趋势；上方总数仅为今天").font(.caption2).foregroundStyle(.secondary) }
+        }
+    }
     private func activityView(_ report:AIReport)->some View {
         let records = report.activity.filter { period.interval().contains($0.date) }
         let tokens = total(records.map(\.tokens)),cached = total(records.map(\.cached)),tools = total(records.map(\.tools))
         let sessions = Set(records.map(\.session).filter { !$0.isEmpty }).count
         let points = BusinessAdapters.daily(chartActivity(report.activity).map { IntegrationPoint(date:$0.date,value:Double($0.tokens)) },timeZone:.current)
-        let tokenLabel = records.allSatisfy { $0.tokenCoverage == "unavailable" } && !records.isEmpty ? "Tokens 未报告":(records.contains(where: \.estimated) ? "≈ ":records.contains { ["partial","unavailable"].contains($0.tokenCoverage ?? "") } ? "≥ ":"") + tokens.formatted() + " tokens"
+        let label = activityTokensLabel(records,tokens:tokens)
+        let caption = report.provider == .cursor ? cursorActivityCaption(records):"缓存 \(cached.formatted()) · 工具调用 \(tools.formatted())"
         return VStack(alignment:.leading,spacing:10) {
-            HStack { Text(tokenLabel).font(.title3.monospacedDigit()); Spacer(); if sessions > 0 { Text("\(sessions) 会话").font(.caption) } }
-            if !points.isEmpty,config["activityStyle"] != "totals" { Chart(points) { point in
-                if config["activityStyle"] == "sparkline" { LineMark(x:.value("日期",point.date),y:.value("Tokens",point.value)).foregroundStyle(DockTheme.accent) }
-                else { BarMark(x:.value("日期",point.date,unit:.day),y:.value("Tokens",point.value)).foregroundStyle(DockTheme.accent) }
-            }.frame(height:100) }
-            if period == .today,!points.isEmpty,config["activityStyle"] != "totals" { Text("近 7 天趋势；上方总数仅为今天").font(.caption2).foregroundStyle(.secondary) }
-            if report.provider == .cursor {
-                let requestText = records.allSatisfy { $0.requestsReported == false } ? "请求单位未报告":(records.contains { $0.requestsReported == false } ? "≥ ":"") + records.reduce(0.0) { $0 + $1.requests }.formatted() + " 报告请求单位"
-                Text(requestText + " · " + (records.compactMap(\.costUSD).isEmpty ? "费用未报告":(records.contains { $0.costUSD == nil } ? "≥ ":"") + records.compactMap(\.costUSD).reduce(0,+).formatted(.currency(code:"USD")) + " 供应商报告费用")).font(.caption)
-            }
-            else if report.provider != .grok { Text("缓存 \(cached.formatted()) · 工具调用 \(tools.formatted())").font(.caption) }
+            HStack { Text(label).font(.title3.monospacedDigit()); Spacer(); if sessions > 0 { Text("\(sessions) 会话").font(.caption) } }
+            activityPlot(points)
+            if report.provider != .grok { Text(caption).font(.caption) }
             if records.isEmpty { Text("此范围没有可读取的活动，不代表账号总用量为零。").font(.caption).foregroundStyle(.secondary) }
         }
+    }
+    private func toggleProvider(_ provider:AIProvider,enabled:Bool) {
+        var selected = providers
+        if enabled { if !selected.contains(provider) { selected.append(provider) } }
+        else {
+            selected.removeAll { $0 == provider }
+            if provider == .claude { Task { await ClaudeDesktopUsage.shared.disconnect(); claudeDesktopConnected = false } }
+            if [.claude,.antigravity].contains(provider) { do { if try !IntegrationStatusBridge.disconnect(provider) { status = "CLI 状态栏命令已改动，保留现有设置。" } } catch { status = error.localizedDescription } }
+        }
+        set("providers",selected.map(\.rawValue).joined(separator:","))
     }
     private var aiSetup:some View {
         VStack(alignment:.leading,spacing:14) {
@@ -354,7 +384,7 @@ struct IntegrationWidgetTile:View {
             if kind == .aiActivity { Picker("活动样式",selection:configBinding("activityStyle",default:"bars")) { Text("柱状").tag("bars"); Text("趋势").tag("sparkline"); Text("总数").tag("totals") }.pickerStyle(.segmented) }
             Text("服务与顺序").font(.headline)
             ForEach(kind == .aiActivity ? AIProvider.allCases.filter(\.supportsActivity):AIProvider.allCases) { provider in
-                HStack { Toggle(provider.title,isOn:Binding(get:{providers.contains(provider)},set:{ enabled in var selected = providers; if enabled { selected.append(provider) } else { selected.removeAll { $0 == provider }; if provider == .claude { Task { await ClaudeDesktopUsage.shared.disconnect(); claudeDesktopConnected = false } }; if [.claude,.antigravity].contains(provider) { do { let restored = try IntegrationStatusBridge.disconnect(provider); if !restored { status = "CLI 状态栏命令已改动，保留现有设置。" } } catch { status = error.localizedDescription } } }; set("providers",selected.map(\.rawValue).joined(separator:",")) })); Spacer(); if let index = providers.firstIndex(of:provider),index > 0 { Button { var selected = providers; selected.swapAt(index,index - 1); set("providers",selected.map(\.rawValue).joined(separator:",")) } label: { Image(systemName:"arrow.up") }.buttonStyle(.plain) } }
+                HStack { Toggle(provider.title,isOn:Binding(get:{providers.contains(provider)},set:{ toggleProvider(provider,enabled:$0) })); Spacer(); if let index = providers.firstIndex(of:provider),index > 0 { Button { var selected = providers; selected.swapAt(index,index - 1); set("providers",selected.map(\.rawValue).joined(separator:",")) } label: { Image(systemName:"arrow.up") }.buttonStyle(.plain) } }
             }
             Picker("显示",selection:configBinding("aiStyle",default:"bars")) { Text("条形").tag("bars"); Text("圆环").tag("rings"); Text("数字").tag("numbers") }.pickerStyle(.segmented)
             Picker("额度",selection:configBinding("usageDisplay",default:"remaining")) { Text("剩余").tag("remaining"); Text("已用").tag("used") }.pickerStyle(.segmented)
