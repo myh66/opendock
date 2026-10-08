@@ -13,7 +13,7 @@
 | 调试和 Release 构建 | Swift 6.4，arm64，macOS 13 编译目标通过。 |
 | App Intents 打包 | `appintentsmetadataprocessor` 成功生成 `Metadata.appintents`；提取包含布局 Entity/Query、Switch Intent、Focus Filter 与 App Shortcuts。尚未配置用户的真实 Focus 自动化。 |
 | 应用启动 | 最终 `.app` 在隔离布局下启动；25 种组件目录，两个测试布局。`--smoke-test` 正常退出。 |
-| 实际界面 | 管理页、关于版本号、设置和 Liquid Glass 选项；自定义布局应用、时钟弹窗/Escape；AI 圆环和逐额度设置；⌘W 关闭 AI 弹窗且管理窗保留；空标题组件显示正确名称。 |
+| 实际界面 | 管理页、关于版本号、设置和 Liquid Glass 选项；自定义布局应用、时钟弹窗/Escape；AI 圆环和逐额度设置；⌘W 关闭 AI 弹窗且管理窗保留；空标题组件显示正确名称；股票日期选择展开后比较整个范围，实际显示金额、百分比及起止日期/跨度（拖动输入仍仅有源码/计算测试证据）。 |
 | 股票真实联网 | Yahoo 公开行情返回并显示股票名称、币种、一个月价格历史及成交量图；该端点无稳定 API 保证。 |
 | AI 界面数据 | 使用明确标注的合成数值缓存验收显示；未连接个人供应商账户，不代表真实额度查询已验证。 |
 | 外设电池 | 3 项合成 fixture 通过，覆盖容量校验、满电/充电冲突、未知状态与同一设备节点去重。本机只读查询返回 0 个外设电量源，尚无真实配件充电验证。 |
@@ -35,4 +35,4 @@
 
 ## 持续集成
 
-公开仓库工作流执行构建、91 项测试、带 App Intents 元数据的应用封装与 ZIP 保存，结果见对应提交的 [Actions](https://github.com/myh66/opendock/actions)。CI 使用 macOS 15 arm64、Apple Swift 6.1.2；本机使用 Swift 6.4。打包脚本按编译器能力选择常量提取参数，并验证切换 action、Focus Filter、布局 entity 与 App Shortcut；历史初版结果不能替代本版发布检查。
+公开仓库工作流执行构建、91 项测试、带 App Intents 元数据的应用封装与 ZIP 保存，结果见对应提交的 [Actions](https://github.com/myh66/opendock/actions)。提交 `1add8e8` 的 [完整 CI](https://github.com/myh66/opendock/actions/runs/37773079887) 已通过：macOS 15 arm64、Apple Swift 6.1.2，91 项测试 0 失败（7.586 秒），元数据/签名验证与 ZIP 产物上传成功。本机使用 Swift 6.4。打包脚本按编译器能力选择常量提取参数，并验证切换 action、Focus Filter、布局 entity 与 App Shortcut；历史初版结果不能替代本版发布检查。
