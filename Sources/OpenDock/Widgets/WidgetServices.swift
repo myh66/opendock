@@ -1,133 +1,58 @@
 import AppKit
 import EventKit
 import Foundation
-import IOKit.ps
+import Carbon
 import Darwin
-
-struct BatteryReading {
-    var percent: Int
-    var charging: Bool
-    var pluggedIn: Bool
-    var remainingMinutes: Int?
-
-    static func read() -> BatteryReading? {
-        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
-        for source in sources {
-            guard let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
-                  let current = description[kIOPSCurrentCapacityKey] as? Int,
-                  let maximum = description[kIOPSMaxCapacityKey] as? Int, maximum > 0 else { continue }
-            let remaining = description[kIOPSTimeToEmptyKey] as? Int
-            let percent = min(100, max(0, Int(Double(current) / Double(maximum) * 100)))
-            return BatteryReading(percent: percent,
-                                  charging: percent < 100 && (description[kIOPSIsChargingKey] as? Bool ?? false),
-                                  pluggedIn: description[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue,
-                                  remainingMinutes: remaining.flatMap { $0 > 0 ? $0 : nil })
-        }
-        return nil
-    }
-}
-
-struct SystemReading {
-    var cpuPercent: Double?
-    var memoryUsed: UInt64
-    var memoryTotal: UInt64
-    var diskFree: UInt64
-    var diskTotal: UInt64
-}
-
-final class SystemSampler {
-    private var previousCPU: [UInt64]?
-    func read() -> SystemReading {
-        let host = mach_host_self()
-        defer { mach_port_deallocate(mach_task_self_, host) }
-        var cpu = host_cpu_load_info()
-        var cpuCount = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.stride / MemoryLayout<integer_t>.stride)
-        let cpuResult = withUnsafeMutablePointer(to: &cpu) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(cpuCount)) {
-                host_statistics(host, HOST_CPU_LOAD_INFO, $0, &cpuCount)
-            }
-        }
-        var percentage: Double?
-        if cpuResult == KERN_SUCCESS {
-            let ticks = [UInt64(cpu.cpu_ticks.0), UInt64(cpu.cpu_ticks.1), UInt64(cpu.cpu_ticks.2), UInt64(cpu.cpu_ticks.3)]
-            if let previous = previousCPU {
-                let delta = zip(ticks, previous).map { $0 >= $1 ? $0 - $1 : 0 }
-                let total = delta.reduce(0, +)
-                if total > 0 { percentage = Double(total - delta[2]) / Double(total) * 100 }
-            }
-            previousCPU = ticks
-        }
-        var memory = vm_statistics64()
-        var memoryCount = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride)
-        let memoryResult = withUnsafeMutablePointer(to: &memory) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(memoryCount)) {
-                host_statistics64(host, HOST_VM_INFO64, $0, &memoryCount)
-            }
-        }
-        var pageSize: vm_size_t = 0
-        host_page_size(host, &pageSize)
-        let usedPages = UInt64(memory.active_count) + UInt64(memory.wire_count) + UInt64(memory.compressor_page_count)
-        let disk = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
-        return SystemReading(cpuPercent: percentage,
-                             memoryUsed: memoryResult == KERN_SUCCESS ? usedPages * UInt64(pageSize) : 0,
-                             memoryTotal: ProcessInfo.processInfo.physicalMemory,
-                             diskFree: (disk?[.systemFreeSize] as? NSNumber)?.uint64Value ?? 0,
-                             diskTotal: (disk?[.systemSize] as? NSNumber)?.uint64Value ?? 0)
-    }
-}
 
 struct CalendarRow: Identifiable {
     var id: String
     var title: String
     var date: Date?
     var allDay: Bool = false
+    var joinURL: URL?
 }
 
+struct CalendarSource: Identifiable { var id: String; var title: String; var account: String }
+
 @MainActor final class WidgetRuntime: ObservableObject {
-    @Published var battery: BatteryReading?
-    @Published var system: SystemReading?
     @Published var calendarRows: [CalendarRow] = []
     @Published var reminderRows: [CalendarRow] = []
+    @Published var calendarSources: [CalendarSource] = []
     @Published var accessMessage: String = ""
     @Published var busy = false
     @Published var message = ""
     @Published var musicTitle = ""
     @Published var musicArtist = ""
     @Published var musicState = ""
+    @Published var musicDuration: Double = 0
+    @Published var musicPosition: Double = 0
+    @Published var musicArtwork: NSImage?
+    @Published var musicConnected = false
+    @Published var activeMusicPlayer = "Music"
     @Published var shortcutNames: [String] = []
     @Published var weatherCities: [WeatherCity] = []
     private let eventStore = EKEventStore()
-    private let sampler = SystemSampler()
-
-    func observe(kind: WidgetKind) async {
-        guard kind == .battery || kind == .system else { return }
-        while !Task.isCancelled {
-            if kind == .battery { battery = BatteryReading.read() }
-            else { system = sampler.read() }
-            do { try await Task.sleep(nanoseconds: kind == .battery ? 30_000_000_000 : 5_000_000_000) }
-            catch { return }
-        }
-    }
+    private var calendarSelection: [String]?
+    private var artworkKey = ""
 
     func authorization(_ reminders: Bool) -> EKAuthorizationStatus {
         EKEventStore.authorizationStatus(for: reminders ? .reminder : .event)
     }
 
-    func connectCalendar(reminders: Bool) {
+    func connectCalendar(reminders: Bool, selection: [String]? = nil) {
         let type: EKEntityType = reminders ? .reminder : .event
         let status = authorization(reminders)
         if status == .denied || status == .restricted {
             accessMessage = "访问未获允许。请在系统设置 → 隐私与安全性中允许 OpenDock 访问。"
             return
         }
-        if status == .authorized { loadCalendar(reminders: reminders); return }
+        if status == .authorized { loadCalendar(reminders: reminders, selection: selection); return }
         busy = true
         let completion: @Sendable (Bool, Error?) -> Void = { [weak self] granted, error in
             Task { @MainActor in
                 guard let self else { return }
                 self.busy = false
-                if granted { self.loadCalendar(reminders: reminders) }
+                if granted { self.loadCalendar(reminders: reminders, selection: selection) }
                 else { self.accessMessage = error?.localizedDescription ?? "未授予访问权限。" }
             }
         }
@@ -137,12 +62,17 @@ struct CalendarRow: Identifiable {
         } else { eventStore.requestAccess(to: type, completion: completion) }
     }
 
-    func loadCalendar(reminders: Bool) {
+    func loadCalendar(reminders: Bool, selection: [String]? = nil) {
         guard authorization(reminders) == .authorized else { return }
+        calendarSelection = selection
         accessMessage = ""
+        let sources = eventStore.calendars(for: reminders ? .reminder : .event)
+        calendarSources = sources.map { CalendarSource(id: $0.calendarIdentifier, title: $0.title, account: $0.source.title) }
+        let selected = selection.map { ids in sources.filter { ids.contains($0.calendarIdentifier) } }
+        if selected?.isEmpty == true { calendarRows = []; reminderRows = []; return }
         if reminders {
             busy = true
-            let predicate = eventStore.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
+            let predicate = eventStore.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: selected)
             eventStore.fetchReminders(matching: predicate) { [weak self] reminders in
                 Task { @MainActor in
                     guard let self else { return }
@@ -155,9 +85,9 @@ struct CalendarRow: Identifiable {
         } else {
             let start = Calendar.current.startOfDay(for: .now)
             let end = Calendar.current.date(byAdding: .day, value: 7, to: start) ?? start.addingTimeInterval(604800)
-            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
-            calendarRows = eventStore.events(matching: predicate).sorted { $0.startDate < $1.startDate }.prefix(30).map {
-                CalendarRow(id: $0.calendarItemIdentifier + String($0.startDate.timeIntervalSince1970), title: $0.title ?? "未命名日程", date: $0.startDate, allDay: $0.isAllDay)
+            let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: selected)
+            calendarRows = eventStore.events(matching: predicate).filter { $0.endDate >= .now }.sorted { $0.startDate < $1.startDate }.prefix(30).map {
+                CalendarRow(id: $0.calendarItemIdentifier + String($0.startDate.timeIntervalSince1970), title: $0.title ?? "未命名日程", date: $0.startDate, allDay: $0.isAllDay, joinURL: MeetingLink.parse(url: $0.url, location: $0.location, notes: $0.notes))
             }
         }
     }
@@ -167,7 +97,7 @@ struct CalendarRow: Identifiable {
         do {
             reminder.isCompleted = true
             try eventStore.save(reminder, commit: true)
-            loadCalendar(reminders: true)
+            loadCalendar(reminders: true, selection: calendarSelection)
         } catch { accessMessage = error.localizedDescription }
     }
 
@@ -194,11 +124,12 @@ struct CalendarRow: Identifiable {
         }
     }
 
-    /// Only called after an explicit Connect, Refresh, or playback-control click.
-    func music(player: String, action: String? = nil) {
+    /// Background calls first check existing automation permission without requesting it.
+    func music(player: String, action: String? = nil, automatic: Bool = false) {
         guard !busy else { return }
         let app = player == "Spotify" ? "Spotify" : "Music"
         let bundleID = app == "Spotify" ? "com.spotify.client" : "com.apple.Music"
+        if automatic && (!WidgetAutomation.running(player: app) || !WidgetAutomation.allowed(bundleID: bundleID)) { return }
         guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else {
             message = "尚未安装 \(app)。"; return
         }
@@ -214,7 +145,11 @@ struct CalendarRow: Identifiable {
             \(command)
             set playbackState to player state as string
             if playbackState is "stopped" then return "stopped"
-            return playbackState & linefeed & (name of current track) & linefeed & (artist of current track)
+            set trackDuration to duration of current track
+            \(app == "Spotify" ? "set trackDuration to trackDuration / 1000" : "")
+            set artworkURL to ""
+            \(app == "Spotify" ? "try\nset artworkURL to artwork url of current track\nend try" : "")
+            return playbackState & linefeed & (name of current track) & linefeed & (artist of current track) & linefeed & (trackDuration as string) & linefeed & (player position as string) & linefeed & artworkURL
         end tell
         """
         busy = true; message = ""
@@ -226,10 +161,46 @@ struct CalendarRow: Identifiable {
                 musicState = rows.first ?? ""
                 musicTitle = rows.count > 1 ? rows[1] : "暂无正在播放的曲目"
                 musicArtist = rows.count > 2 ? rows[2] : ""
+                musicDuration = rows.count > 3 ? Double(rows[3]) ?? 0 : 0
+                musicPosition = rows.count > 4 ? Double(rows[4]) ?? 0 : 0
+                activeMusicPlayer = app; musicConnected = true
+                let key = app + musicTitle + musicArtist
+                if key != artworkKey {
+                    artworkKey = key; musicArtwork = nil
+                    if app == "Spotify", rows.count > 5, let url = URL(string: rows[5]), url.scheme == "https" {
+                        if let data = try? await WidgetNetwork.get(url), artworkKey == key { musicArtwork = NSImage(data: data) }
+                    } else if app == "Music", musicState != "stopped", !automatic || WidgetAutomation.allowed(bundleID: bundleID) {
+                        let file = FileManager.default.temporaryDirectory.appendingPathComponent("opendock-art-\(UUID().uuidString).image")
+                        let artScript = """
+                        tell application "Music"
+                            try
+                                set artworkData to raw data of artwork 1 of current track
+                                set outputFile to open for access POSIX file "\(file.path)" with write permission
+                                set eof outputFile to 0
+                                write artworkData to outputFile
+                                close access outputFile
+                            end try
+                        end tell
+                        """
+                        _ = await WidgetCommand.run(executable: "/usr/bin/osascript", arguments: ["-e", artScript])
+                        if artworkKey == key { musicArtwork = NSImage(contentsOf: file) }
+                        try? FileManager.default.removeItem(at: file)
+                    }
+                }
             } else {
                 message = result.error
                 musicTitle = ""
             }
+        }
+    }
+
+    func observeMusic(sources: [String], enabled: Bool) async {
+        guard enabled else { return }
+        while !Task.isCancelled {
+            let running = sources.filter { WidgetAutomation.running(player: $0) }
+            if running.isEmpty { musicTitle = ""; musicArtwork = nil; musicState = "" }
+            else if let player = running.first(where: { WidgetAutomation.allowed(bundleID: $0 == "Spotify" ? "com.spotify.client" : "com.apple.Music") }) { music(player: player, automatic: true) }
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
         }
     }
 
@@ -246,14 +217,14 @@ struct CalendarRow: Identifiable {
         } catch { message = error.localizedDescription }
     }
 
-    func fetchWeather(latitude: String, longitude: String) async -> WeatherCurrent? {
+    func fetchWeather(latitude: String, longitude: String, fahrenheit: Bool = false) async -> WeatherForecast? {
         guard !busy, Double(latitude) != nil, Double(longitude) != nil else { return nil }
         busy = true; message = ""
         defer { busy = false }
         do {
             var url = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
-            url.queryItems = [URLQueryItem(name: "latitude", value: latitude), URLQueryItem(name: "longitude", value: longitude), URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m"), URLQueryItem(name: "timezone", value: "auto")]
-            return try JSONDecoder().decode(WeatherForecast.self, from: await WidgetNetwork.get(url.url!)).current
+            url.queryItems = [URLQueryItem(name: "latitude", value: latitude), URLQueryItem(name: "longitude", value: longitude), URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m"), URLQueryItem(name: "hourly", value: "temperature_2m,precipitation_probability,weather_code"), URLQueryItem(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"), URLQueryItem(name: "forecast_days", value: "7"), URLQueryItem(name: "temperature_unit", value: fahrenheit ? "fahrenheit" : "celsius"), URLQueryItem(name: "wind_speed_unit", value: fahrenheit ? "mph" : "kmh"), URLQueryItem(name: "timezone", value: "auto")]
+            return try JSONDecoder().decode(WeatherForecast.self, from: await WidgetNetwork.get(url.url!))
         } catch { message = error.localizedDescription; return nil }
     }
 }
@@ -278,14 +249,35 @@ struct WeatherCity: Decodable, Identifiable {
     var admin1: String?
     var label: String { [name, admin1, country].compactMap { $0 }.joined(separator: " · ") }
 }
-struct WeatherForecast: Decodable { var current: WeatherCurrent }
-struct WeatherCurrent: Decodable {
+struct WeatherForecast: Codable {
+    var current: WeatherCurrent
+    var hourly: WeatherHourly?
+    var daily: WeatherDaily?
+    var timezone: String?
+}
+struct WeatherHourly: Codable { var time: [String]; var temperature_2m: [Double?]; var precipitation_probability: [Int?]; var weather_code: [Int?] }
+struct WeatherDaily: Codable { var time: [String]; var temperature_2m_max: [Double?]; var temperature_2m_min: [Double?]; var precipitation_probability_max: [Int?]; var weather_code: [Int?] }
+struct WeatherCurrent: Codable {
     var time: String
     var temperature_2m: Double
     var relative_humidity_2m: Double
     var apparent_temperature: Double
     var weather_code: Int
     var wind_speed_10m: Double
+}
+
+enum WidgetAutomation {
+    static func running(player: String) -> Bool {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == (player == "Spotify" ? "com.spotify.client" : "com.apple.Music") }
+    }
+    static func allowed(bundleID: String) -> Bool {
+        var target = AEAddressDesc()
+        let bytes = Array(bundleID.utf8)
+        let result = bytes.withUnsafeBytes { AECreateDesc(DescType(typeApplicationBundleID), $0.baseAddress, bytes.count, &target) }
+        guard result == noErr else { return false }
+        defer { AEDisposeDesc(&target) }
+        return AEDeterminePermissionToAutomateTarget(&target, AEEventClass(typeWildCard), AEEventID(typeWildCard), false) == noErr
+    }
 }
 
 enum WidgetCommand {
@@ -308,7 +300,12 @@ enum WidgetCommand {
                     process.standardOutput = output; process.standardError = errors
                     try process.run()
                     // Cancel hung automation and commands after five minutes.
-                    let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
+                    let timeout = DispatchWorkItem {
+                        if process.isRunning {
+                            process.terminate()
+                            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+                        }
+                    }
                     DispatchQueue.global().asyncAfter(deadline: .now() + 300, execute: timeout)
                     process.waitUntilExit()
                     timeout.cancel()

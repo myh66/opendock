@@ -1,13 +1,15 @@
 import AppKit
 import ApplicationServices
 import UniformTypeIdentifiers
+import ImageIO
 
 struct ApplicationWindow: Identifiable {
     let id: String
     let title: String
     let isMinimized: Bool
-    fileprivate let element: AXUIElement
-    fileprivate let processIdentifier: pid_t
+    let element: AXUIElement
+    let processIdentifier: pid_t
+    let frame: CGRect?
 }
 
 /// Uses NSWorkspace and the public Accessibility API. Reading window lists never
@@ -29,6 +31,28 @@ enum AppService {
     }
 
     static func icon(for item: DockItem) -> NSImage {
+        if let symbol = item.configuration["iconSymbol"], !symbol.isEmpty,
+           let icon = NSImage(systemSymbolName: symbol, accessibilityDescription: item.title) {
+            return icon.withSymbolConfiguration(.init(paletteColors: [iconColor(item.configuration["color"] ?? item.configuration["folderColor"] ?? item.configuration["groupColor"] ?? "8B7BF4")])) ?? icon
+        }
+        if item.kind == .link, let encoded = item.configuration["faviconPNG"], let data = Data(base64Encoded: encoded), data.count <= 500_000,
+           let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+           let width = properties[kCGImagePropertyPixelWidth as String] as? Int,
+           let height = properties[kCGImagePropertyPixelHeight as String] as? Int,
+           width > 0, width <= 2048, height > 0, height <= 2048, let image = NSImage(data: data) { return image }
+        if item.kind == .link, let letter = item.configuration["letter"] {
+            return labeledIcon(color: item.configuration["color"] ?? "8B7BF4", text: letter, folder: false)
+        }
+        if item.kind == .folder, item.configuration["folderColor"] != nil || item.configuration["folderLetter"] != nil || item.configuration["color"] != nil {
+            return labeledIcon(color: item.configuration["folderColor"] ?? item.configuration["color"] ?? "699DCF", text: item.configuration["folderLetter"] ?? item.configuration["letter"] ?? "", folder: true)
+        }
+        if item.kind == .appGroup {
+            return labeledIcon(color: item.configuration["groupColor"] ?? item.configuration["color"] ?? "8B7BF4", text: item.configuration["groupName"] ?? item.configuration["letter"] ?? item.title, folder: false)
+        }
+        if item.kind == .app, Bundle(path: resolvedPath(item.target))?.bundleIdentifier == "com.apple.iCal" {
+            return calendarIcon(date: Date())
+        }
         if [.app, .folder, .file].contains(item.kind), !item.target.isEmpty {
             return NSWorkspace.shared.icon(forFile: resolvedPath(item.target))
         }
@@ -148,17 +172,110 @@ enum AppService {
         var result: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &result) == .success,
               let windows = result as? [AXUIElement] else { return [] }
-        return windows.enumerated().map { index, window in
+        return windows.map { window in
             var title: CFTypeRef?
             var minimized: CFTypeRef?
             _ = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title)
             _ = AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized)
             let windowTitle = title as? String ?? ""
-            return ApplicationWindow(id: "\(application.processIdentifier):\(CFHash(window)):\(index)",
+            let launch = application.launchDate?.timeIntervalSince1970 ?? 0
+            return ApplicationWindow(id: "\(application.processIdentifier):\(launch):\(CFHash(window))",
                                      title: windowTitle.isEmpty ? (application.localizedName ?? "窗口") : windowTitle,
                                      isMinimized: minimized as? Bool ?? false, element: window,
-                                     processIdentifier: application.processIdentifier)
+                                     processIdentifier: application.processIdentifier, frame: windowFrame(window))
         }
+    }
+
+    /// Only reads the Dock's exposed badge/status label. Notification text and
+    /// notification-center databases are never inspected.
+    static func dockBadges() -> [String: String] {
+        guard accessibilityEnabled, let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return [:] }
+        let root = AXUIElementCreateApplication(dock.processIdentifier)
+        var result: [String: String] = [:]
+        let applications = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }
+        func visit(_ element: AXUIElement, depth: Int) {
+            guard depth < 5 else { return }
+            var names: CFArray?
+            if AXUIElementCopyAttributeNames(element, &names) == .success,
+               let statusAttribute = (names as? [String])?.first(where: { $0.hasSuffix("StatusLabel") }) {
+                var status: CFTypeRef?
+                var title: CFTypeRef?
+                var location: CFTypeRef?
+                _ = AXUIElementCopyAttributeValue(element, statusAttribute as CFString, &status)
+                _ = AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+                _ = AXUIElementCopyAttributeValue(element, kAXURLAttribute as CFString, &location)
+                if let label = status as? String, let badge = badgeToken(from: label) {
+                    if let url = location as? URL, url.isFileURL { result[url.standardizedFileURL.path] = badge }
+                    else if let app = applications.first(where: { $0.localizedName == title as? String }), let path = app.bundleURL?.standardizedFileURL.path { result[path] = badge }
+                }
+            }
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+               let children = value as? [AXUIElement] { for child in children.prefix(120) { visit(child, depth: depth + 1) } }
+        }
+        visit(root, depth: 0)
+        return result
+    }
+
+    static func badgeToken(from label: String) -> String? {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let range = trimmed.range(of: "[0-9]+(?:\\+)?", options: .regularExpression) { return String(trimmed[range]) }
+        return "•"
+    }
+
+    static func calendarIcon(date: Date, calendar: Calendar = .current) -> NSImage {
+        let day = String(calendar.component(.day, from: date))
+        let formatter = DateFormatter(); formatter.calendar = calendar; formatter.dateFormat = "MMM"
+        let month = formatter.string(from: date).uppercased()
+        return NSImage(size: NSSize(width: 128, height: 128), flipped: false) { _ in
+            let body = NSBezierPath(roundedRect: NSRect(x: 8, y: 8, width: 112, height: 112), xRadius: 23, yRadius: 23)
+            NSColor.white.setFill(); body.fill()
+            NSColor.systemRed.setFill(); NSBezierPath(roundedRect: NSRect(x: 8, y: 85, width: 112, height: 35), xRadius: 17, yRadius: 17).fill()
+            NSColor.systemRed.setFill(); NSRect(x: 8, y: 85, width: 112, height: 17).fill()
+            drawCentered(month, in: NSRect(x: 11, y: 92, width: 106, height: 20), font: .systemFont(ofSize: 17, weight: .semibold), color: .white)
+            drawCentered(day, in: NSRect(x: 9, y: 13, width: 110, height: 70), font: .systemFont(ofSize: 62, weight: .light), color: .black)
+            return true
+        }
+    }
+
+    static func labeledIcon(color: String, text: String, folder: Bool) -> NSImage {
+        let tint = iconColor(color)
+        let label = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(folder ? 1 : 2))
+        return NSImage(size: NSSize(width: 128, height: 128), flipped: false) { _ in
+            tint.setFill()
+            if folder {
+                NSBezierPath(roundedRect: NSRect(x: 9, y: 82, width: 48, height: 27), xRadius: 9, yRadius: 9).fill()
+                NSBezierPath(roundedRect: NSRect(x: 8, y: 22, width: 112, height: 75), xRadius: 13, yRadius: 13).fill()
+            } else { NSBezierPath(roundedRect: NSRect(x: 8, y: 8, width: 112, height: 112), xRadius: 24, yRadius: 24).fill() }
+            if !label.isEmpty { drawCentered(label, in: NSRect(x: 14, y: folder ? 28 : 25, width: 100, height: 68), font: .systemFont(ofSize: 43, weight: .semibold), color: .white) }
+            else if let symbol = NSImage(systemSymbolName: folder ? "folder.fill" : "square.grid.2x2.fill", accessibilityDescription: nil) {
+                symbol.draw(in: NSRect(x: 38, y: 40, width: 52, height: 48))
+            }
+            return true
+        }
+    }
+
+    private static func drawCentered(_ text: String, in rect: NSRect, font: NSFont, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+        (text as NSString).draw(in: rect, withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
+    }
+
+    private static func iconColor(_ value: String) -> NSColor {
+        let hex = value.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard hex.count == 6, let number = UInt32(hex, radix: 16) else { return .systemBlue }
+        return NSColor(srgbRed: CGFloat((number >> 16) & 255) / 255, green: CGFloat((number >> 8) & 255) / 255, blue: CGFloat(number & 255) / 255, alpha: 1)
+    }
+
+    private static func windowFrame(_ window: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?, sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef, CFGetTypeID(positionRef) == AXValueGetTypeID(), CFGetTypeID(sizeRef) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(positionRef, to: AXValue.self), .cgPoint, &position),
+              AXValueGetValue(unsafeBitCast(sizeRef, to: AXValue.self), .cgSize, &size) else { return nil }
+        return CGRect(origin: position, size: size)
     }
 
     @discardableResult

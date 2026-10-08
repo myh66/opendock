@@ -17,6 +17,10 @@ final class NativeDockService {
 
     var hasBackup: Bool { FileManager.default.fileExists(atPath: backupURL.path) }
 
+    static func performDockMutation(_ operation: () async throws -> Void) async throws {
+        try await mutations.perform(operation)
+    }
+
     func captureProfile(name: String) throws -> DockProfile {
         let preferences = try Self.readPreferences()
         let tiles: [[String: Any]]
@@ -27,13 +31,16 @@ final class NativeDockService {
         return DockProfile(name: name, kind: .native, items: try Self.items(from: tiles))
     }
 
-    func apply(_ profile: DockProfile) async throws {
+    func apply(_ profile: DockProfile, smooth: Bool = false) async throws {
         guard profile.kind == .native else { throw NativeDockError.notNativeProfile }
         let tiles = try Self.tiles(for: profile.items, validateApplications: true)
         try await Self.mutations.perform {
             let originals = try Self.readPreferences()
             try self.saveBackup(originals)
-            try await Self.replacePinnedApps(tiles, rollback: originals["persistent-apps"])
+            let transition = smooth ? await DockTransitionService.shared.begin() : nil
+            do { try await Self.replacePinnedApps(tiles, rollback: originals["persistent-apps"]) }
+            catch { await DockTransitionService.shared.end(transition); throw error }
+            await DockTransitionService.shared.end(transition)
         }
     }
 

@@ -2,7 +2,7 @@
 
 A native macOS Dock manager built with SwiftUI and AppKit. Save and switch layouts, or use a separate Dock with apps, files, and widgets. Requires macOS 13+ and Swift 5.9+. No third-party Swift packages.
 
-[中文](README.md) · [Feature comparison](docs/FEATURES.md) · [Usage](docs/USAGE.md) · [Contributing](CONTRIBUTING.md)
+[中文](README.md) · [Feature comparison](docs/PARITY.md) · [Usage](docs/USAGE.md) · [Contributing](CONTRIBUTING.md)
 
 This is an independent implementation inspired by Dockset's publicly documented functionality. OpenDock uses its own code, name, and artwork, and is not affiliated with Dockset or its developer. No Dockset source, binaries, licensing implementation, or artwork is included. References: [product](https://dockset.app), [changelog](https://dockset.app/changelog), [manual](https://dockset.app/manual).
 
@@ -11,13 +11,15 @@ This is an independent implementation inspired by Dockset's publicly documented 
 - Custom and native macOS Dock profiles, with an editor for apps, files, folders, URLs, spacers, and app groups.
 - A separate native Dock panel with edge placement, size, material, auto-hide, running apps, and widgets.
 - Menu bar and global keyboard switching, JSON import/export, and backups before native Dock changes.
-- Sixteen widgets for time, productivity, system information, weather, Shortcuts, music, and AirDrop.
+- Twenty-five widgets, including alarms, weather forecasts, network activity, stocks/watchlists, Stripe, Paddle, Shopify, AI Limits, and AI Activity.
+- Native Focus Filters and Shortcuts, configurable per-profile hotkeys, group selection/reordering, window preview caching, and checked GitHub updates.
+- Seven AI providers with explicitly connected sources, read-only quota queries, local activity, shared connections, display styles, and date ranges.
 
-This initial development version does not provide full Dockset 0.2.6 parity. Commercial integrations, AI provider usage, cached window previews, and native Focus Filters are not implemented. See the [feature matrix](docs/FEATURES.md) for status and verification limits.
+Version 0.2.0 is a development Beta. The [feature matrix](docs/PARITY.md), [integration guide](docs/INTEGRATIONS.md), and [verification record](docs/VERIFICATION.md) distinguish implementation from actual account and device testing. Financial and AI accounts, system permissions, full-screen/multi-Space behavior, and installation updates have not all been tested end to end.
 
 ## Build
 
-Install Xcode Command Line Tools (`xcode-select --install`) if needed, then:
+Basic source builds require Swift 5.9+. Building the full application bundle and its App Intents metadata requires Xcode 16+ selected with `xcode-select`, then:
 
 ```sh
 swift build

@@ -1,53 +1,36 @@
-# 验证清单
+# 验证证据
 
-本文件记录 OpenDock 初始开发 Beta 的验证边界；构建通过、应用能打开、单元测试通过分别证明不同事情。
+2026-10-08，OpenDock **0.2.0 Beta 1**。代码覆盖、自动测试、实际界面与外部账号验证分别记录。
 
-## 自动检查
+## 已完成
 
-| 检查 | 状态 |
+| 检查 | 结果与范围 |
 | --- | --- |
-| Swift 调试构建 | 已通过（Swift 6.4，macOS 13 编译目标） |
-| Swift 单元测试 | 25 项通过，0 失败；布局、导入、持久化、拖拽、计时与原生序列化 |
-| `.app --smoke-test` 启动 | 退出码 0；3 个布局、16 种组件、3 个可见窗口初始化成功（不代表视觉验收） |
-| 启动前后系统 Dock 固定布局 | 导出 `persistent-apps` 的校验摘要一致，39 个项目未改变 |
-| Swift Release 构建与 `.app` 打包 | 本机通过，arm64；后续源码修改需重新打包 |
-| 原创图标生成与 `.icns` 转换 | 已通过本机检查 |
-| 打包脚本语法检查 | 已通过 `bash -n` |
-| 应用签名与 Info.plist 校验 | 本机通过，ad hoc 签名；无 Developer ID 公证 |
-| DMG 创建与验证 | 本机通过，`hdiutil verify` 校验成功 |
-| 相对 Markdown 链接 | 本机检查通过 |
-| 公开文件凭据与私人路径字符串检查 | 已检查拟发布文件，未发现硬编码凭据或私人用户路径 |
-| GitHub Actions 执行 | 工作流配置已准备，尚未取得远程执行结果 |
+| 完整单元测试 | **84 项通过，0 失败**。归档迁移、稳定排序、通知独立身份、原生序列化/FIFO、模式备份校验、窗口缓存、CPU/网络 delta、存储、商业口径、AI 数据与子进程协议。 |
+| 子进程专项复测 | **9 项通过**。分段 stdin/JSONL、只读握手、重复初始化、输入上限、取消、SIGTERM 忽略后的 SIGKILL。仅使用临时合成脚本。修复执行计时在 macOS 启动完成前提前耗尽的问题。 |
+| Claude Desktop 合成测试 | 5 项包含在完整测试：独立 PBKDF2/AES 向量、Chromium v23/v24 域绑定、过期/冲突会话、SQLite 字段过滤、数值额度。未访问个人 Cookies 或钥匙串。 |
+| 调试和 Release 构建 | Swift 6.4，arm64，macOS 13 编译目标通过。 |
+| App Intents 打包 | `appintentsmetadataprocessor` 成功生成 `Metadata.appintents`；提取包含布局 Entity/Query、Switch Intent、Focus Filter 与 App Shortcuts。尚未配置用户的真实 Focus 自动化。 |
+| 应用启动 | 最终 `.app` 在隔离布局下启动；25 种组件目录，两个测试布局。`--smoke-test` 正常退出。 |
+| 实际界面 | 管理页、关于版本号、设置和 Liquid Glass 选项；自定义布局应用、时钟弹窗/Escape；AI 圆环和逐额度设置；⌘W 关闭 AI 弹窗且管理窗保留；空标题组件显示正确名称。 |
+| 股票真实联网 | Yahoo 公开行情返回并显示股票名称、币种、一个月价格历史及成交量图；该端点无稳定 API 保证。 |
+| AI 界面数据 | 使用明确标注的合成数值缓存验收显示；未连接个人供应商账户，不代表真实额度查询已验证。 |
+| 原生 Dock 保留 | 测试前后 `persistent-apps` 内容与 autohide/延迟/动画设置一致，固定项目 **39 个**。测试未应用或重启用户 Dock。 |
+| 签名和封装 | Info.plist 与 ad hoc `codesign --verify --strict` 通过；DMG 创建及 `hdiutil verify` 通过；ZIP 和 DMG 附 SHA-256。 |
 
-### 打包证据（2026-10-08）
+隔离界面测试通过 `--ui-test` 和 `OPENDOCK_TEST_ARCHIVE` 指定临时布局及集成缓存；启动/退出跳过原生替代模式恢复和 AX 窗口尺寸调整。合成数据、脚本、测试日志没有纳入发布包。
 
-已执行 `./scripts/build-app.sh` 与 `./scripts/package-dmg.sh`：Release 可执行文件为 Mach-O arm64，原创新图标生成与 `iconutil` 转换成功；`plutil -lint` 校验应用 Info.plist 成功；`codesign --verify --strict --verbose=2` 确认 ad hoc 签名有效；`hdiutil verify` 确认生成 DMG 的校验和有效。工具输出的应用标识符为 `io.github.myh66.opendock`，未设置 Developer ID TeamIdentifier。
+## 尚未完成的实际验证
 
-这些检查证明构建与封装完成。DMG 安装、另一台 Mac 打开、升级后的权限、系统 Dock 实际恢复与真机 UI 仍需独立验收。验证后发生的源码修改需要最终重新打包。本机系统提示 `hdiutil create` 已弃用，但命令执行和校验成功；目前保留该工具以兼容 macOS 13 开发环境。
+- 原生布局写入、快速连续切换、失败回滚、替代模式退出恢复；实现有序列化/队列/快照测试，但没有修改本机 Dock 验收。
+- Focus Filter 和 Shortcuts 的系统注册发现与真实执行；元数据存在不等于已配置自动化。
+- 多屏、全屏、多个 Space、动态 WallpaperAgent、Mission Control 精确优先级，以及窗口避让/预览/角标的实机组合。
+- 日历、提醒事项、通知、定位、Music/Spotify、登录启动的允许/拒绝/升级授权流程；AirDrop 的接收设备传输。
+- Stripe、Paddle、Shopify 与七种 AI 来源的实号端到端验证。Gemini 加密凭据、旧 Grok 日志、复杂 Stripe MRR 和非稳定客户端接口限制见 [连接指南](INTEGRATIONS.md)。
+- 覆盖安装更新、Intel/macOS 13/14 实机、Universal Binary、Developer ID、公证与 App Store 分发。
 
-打包脚本按当前工具链架构构建；本次本机结果为 arm64，CI 架构由 runner 决定，没有生成 Universal Binary。字符串检查用于避免误提交私密数据，不等同于全面安全审计。
-
-## 真机验收
-
-以下项目不能由单元测试替代。未写入明确通过证据的项目均为待验证。
-
-- 初次打开不会修改 Apple Dock；退出和重新打开保留布局。
-- 自定义 Dock 位置、隐藏与显示、图标、运行中应用、组件弹窗和菜单栏切换。
-- 多显示器、全屏、多 Space、窗口层级与不同缩放比例。
-- 全局快捷键冲突、屏幕边缘唤出和键盘可访问性。
-- 保存 Apple Dock → 应用新布局 → 验证读取结果 → 恢复备份，包含应用失败后的回滚。
-- 损坏 JSON、不支持版本、重复 ID、缺失应用与导入合并。
-- 日历／提醒事项允许与拒绝授权；完成提醒事项；音乐自动化的授权提示与拒绝路径。
-- 天气联网、超时、空结果；无电池的台式 Mac；Shortcuts 与 AirDrop 的真实系统操作。
-- 登录启动在已安装的应用包上生效；移除登录项有效。
-- ad hoc 签名 Beta 的升级权限表现与另一个 Mac 的 Gatekeeper 提示。
-
-未经测试的生产发布条件：Developer ID 公证、真实更新安装、App Store 审核、商业和 AI 服务接入。
-
-## 本轮界面验收限制
-
-2026-10-08 已执行打开应用。原生界面检查工具报告 Mac 锁屏，无法取得界面或操作弹窗；已请求用户手动解锁。当前不将界面、自动隐藏、窗口重开或实际权限流程标记为通过。没有在测试中应用或重启系统 Dock。
+此包为 **arm64、ad hoc 签名、未公证的开发 Beta**。不能宣称 Dockset 0.2.6 全部细节已在所有环境完整实测。逐项覆盖见 [功能矩阵](PARITY.md)。
 
 ## 持续集成
 
-首次公开提交 `a2b3163` 的 [GitHub Actions](https://github.com/myh66/opendock/actions/runs/37712219313) 已成功执行构建、25 项测试与应用打包。后续提交的 CI 状态以该提交对应的运行记录为准。CI 使用 `macos-15`，产物采用运行器的架构。
+公开仓库工作流执行构建、测试、带 App Intents 元数据的应用封装与 ZIP 保存。历史初版的 [CI](https://github.com/myh66/opendock/actions/runs/37712447779) 已通过；本版以对应提交的 [Actions](https://github.com/myh66/opendock/actions) 记录为准。CI 使用 macOS 15；运行器架构与本机包分别记录。

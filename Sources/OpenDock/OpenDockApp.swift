@@ -3,6 +3,13 @@ import AppKit
 import Combine
 
 @main
+enum OpenDockBootstrap {
+    @MainActor static func main() {
+        if IntegrationStatusBridge.runIfRequested() { exit(0) }
+        OpenDockApp.main()
+    }
+}
+
 struct OpenDockApp: App {
     @NSApplicationDelegateAdaptor(OpenDockDelegate.self) private var delegate
     @StateObject private var store = AppStore.shared
@@ -17,17 +24,21 @@ struct OpenDockApp: App {
             CommandGroup(after: .importExport) { Button("导入布局…") { store.importArchive() }; Button("导出布局…") { store.exportArchive() }.keyboardShortcut("e", modifiers: [.command, .shift]) }
             CommandGroup(replacing: .appInfo) { Button("关于 OpenDock") { delegate.showManager() } }
         }
-        MenuBarExtra("OpenDock", systemImage: "dock.rectangle") { DockMenu().environmentObject(store) }
+        MenuBarExtra { DockMenu().environmentObject(store) } label: {
+            Label(store.settings.showActiveNameInMenuBar ? (store.settings.mode == .nativeOnly ? store.profiles.first { $0.id == store.archive.activeNativeID }?.name : store.activeCustom?.name) ?? "OpenDock" : "OpenDock", systemImage: "dock.rectangle")
+        }
     }
 }
 
 struct ManagerWindowContent: View {
     @Environment(\.openWindow) private var openWindow
     let delegate: OpenDockDelegate
+    @EnvironmentObject private var store: AppStore
     var body: some View {
-        ManagerView().onAppear {
+        ManagerView().sheet(isPresented: $store.tourPresented) { WalkthroughView().environmentObject(store) }.onAppear {
             let action = openWindow
             delegate.managerOpener = { action(id: "manager") }
+            if !store.settings.hasCompletedTour { store.tourPresented = true }
         }
     }
 }
@@ -43,7 +54,7 @@ struct DockMenu: View {
         if store.profiles.contains(where: { $0.kind == .native }) {
             Divider(); Text("macOS Dock")
             ForEach(store.profiles.filter { $0.kind == .native }) { profile in
-                Button(profile.name) { store.selectedID = profile.id; store.requestedPage = "docks"; openWindow(id: "manager"); NSApp.activate(ignoringOtherApps: true) }
+                Button { store.activate(profile) } label: { Label(profile.name, systemImage: store.archive.activeNativeID == profile.id ? "checkmark.circle.fill" : "circle") }
             }
         }
         Divider()
@@ -61,18 +72,26 @@ final class OpenDockDelegate: NSObject, NSApplicationDelegate {
     private var dockController: DockPanelController?
     private let hotkeys = GlobalHotkeyService()
     private var cancellables = Set<AnyCancellable>()
+    private var terminating = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         let store = AppStore.shared
         dockController = DockPanelController(store: store, openManager: { [weak self] in self?.showManager() })
-        store.$archive.map { $0.profiles.map(\.id) }.removeDuplicates().sink { [weak self] ids in
-            self?.hotkeys.register(count: min(ids.count, 9)) { index in
-                guard index >= 0, index < store.profiles.count else { return }
-                let profile = store.profiles[index]
-                if profile.kind == .custom { store.activate(profile) }
-                else { store.selectedID = profile.id; store.requestedPage = "docks"; self?.showManager() }
+        store.$archive.map { $0.profiles.map { profile in var copy = profile; copy.items = []; return copy } }.removeDuplicates().sink { [weak self] profiles in
+            self?.hotkeys.register(profiles: profiles) { index in
+                guard store.profiles.indices.contains(index) else { return }
+                store.activate(store.profiles[index])
             }
+            if let indices = self?.hotkeys.unavailableIndices, !indices.isEmpty { store.notice = "部分快捷键被占用：" + indices.map { store.profiles[$0].name }.joined(separator: "、") + "。请在设置中重新录制。" }
         }.store(in: &cancellables)
+        store.$archive.map(\.settings).removeDuplicates().sink { settings in
+            let testing = ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--ui-test")
+            if !testing { NativeDockModeService.shared.update(mode: settings.mode) }
+            if WindowMonitor.shared.enabled != settings.showMinimizedWindows { WindowMonitor.shared.setEnabled(settings.showMinimizedWindows) }
+            if WindowMonitor.shared.badgesEnabled != settings.showBadges { WindowMonitor.shared.setBadgesEnabled(settings.showBadges) }
+            if settings.autoSaveNativeChanges && !testing { store.startNativeObservation() } else { store.stopNativeObservation() }
+        }.store(in: &cancellables)
+        store.$archive.map { $0.settings.automaticUpdateCheck }.removeDuplicates().sink { enabled in UpdateService.shared.setAutomatic(enabled) }.store(in: &cancellables)
         if ProcessInfo.processInfo.arguments.contains("--smoke-test") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 let count = NSApp.windows.filter { $0.isVisible }.count
@@ -80,6 +99,18 @@ final class OpenDockDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--ui-test") { return .terminateNow }
+        if terminating { return .terminateNow }
+        dockController?.prepareForTermination()
+        guard NativeDockModeService.shared.hasRecoverySnapshot || AppStore.shared.applyingNative else { return .terminateNow }
+        terminating = true
+        Task {
+            do { try await NativeDockModeService.shared.restoreForTermination(); sender.reply(toApplicationShouldTerminate: true) }
+            catch { terminating = false; AppStore.shared.errorMessage = "退出前恢复系统 Dock 失败：\(error.localizedDescription)"; showManager(); sender.reply(toApplicationShouldTerminate: false) }
+        }
+        return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func application(_ application: NSApplication, open urls: [URL]) {

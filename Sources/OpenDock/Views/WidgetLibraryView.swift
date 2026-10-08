@@ -10,7 +10,7 @@ struct WidgetLibraryView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack { VStack(alignment: .leading, spacing: 7) { Text("多一点，刚刚好。").font(.system(size: 25, weight: .semibold)); Text("把实用的小组件，放进你的 Dock。").font(.system(size: 12)).foregroundStyle(DockTheme.secondary) }; Spacer(); Button { dismiss() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(DockTheme.secondary).font(.title2) }.buttonStyle(.plain) }
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(DockTheme.secondary); TextField("搜索组件", text: $search).textFieldStyle(.plain) }.padding(12).background(.white).clipShape(RoundedRectangle(cornerRadius: 10))
-            HStack(spacing: 8) { ForEach(["全部", "效率", "时间", "系统", "生活"], id: \.self) { title in Button { category = title } label: { Text(title).font(.system(size: 11, weight: .medium)).padding(.horizontal, 15).padding(.vertical, 8).background(category == title ? DockTheme.accent : .white).foregroundStyle(category == title ? .white : DockTheme.secondary).clipShape(Capsule()) }.buttonStyle(.plain) } }
+            HStack(spacing: 8) { ForEach(["全部", "效率", "时间", "系统", "生活", "商业", "AI"], id: \.self) { title in Button { category = title } label: { Text(title).font(.system(size: 11, weight: .medium)).padding(.horizontal, 15).padding(.vertical, 8).background(category == title ? DockTheme.accent : .white).foregroundStyle(category == title ? .white : DockTheme.secondary).clipShape(Capsule()) }.buttonStyle(.plain) } }
             ScrollView {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 13) {
                     ForEach(widgets) { widget in

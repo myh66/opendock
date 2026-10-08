@@ -12,6 +12,10 @@ struct ManagerView: View {
     @State private var confirmDelete: DockProfile?
     @State private var confirmNative: DockProfile?
     @State private var groupName = "应用分组"
+    @State private var selectedItems = Set<UUID>()
+    @State private var selectionAnchor: UUID?
+    @State private var editingItem: DockItem?
+    @State private var editingProfileID: UUID?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -31,6 +35,13 @@ struct ManagerView: View {
         .tint(DockTheme.accent)
         .sheet(isPresented: $store.widgetLibraryPresented) { WidgetLibraryView() }
         .sheet(isPresented: $showingLink) { linkSheet }
+        .sheet(item: $editingItem) { item in
+            if let profileID = editingProfileID {
+                ItemEditorSheet(item: item, native: store.profiles.first { $0.id == profileID }?.kind == .native) { updated in
+                    store.updateItem(updated, profileID: profileID)
+                }
+            }
+        }
         .alert("无法完成操作", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了", role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -44,8 +55,10 @@ struct ManagerView: View {
         } message: { Text("将替换系统 Dock 中固定的应用和分隔符，并重新启动 Dock。原布局会自动备份，可在设置中恢复。") }
         .onChange(of: store.settingsPresented) { value in if value { page = "settings"; store.settingsPresented = false } }
         .onChange(of: store.requestedPage) { value in if let value { page = value; store.requestedPage = nil } }
-        .onChange(of: store.selectedID) { _ in page = "docks" }
+        .onChange(of: store.selectedID) { _ in page = "docks"; selectedItems = []; selectionAnchor = nil }
+        .onChange(of: page) { value in store.settings.managerPage = value }
         .onAppear {
+            page = store.settings.managerPage
             if store.settingsPresented { page = "settings"; store.settingsPresented = false }
             if let requested = store.requestedPage { page = requested; store.requestedPage = nil }
         }
@@ -89,7 +102,7 @@ struct ManagerView: View {
                 sidebarButton("外观与设置", symbol: "slider.horizontal.3", target: "settings")
                 sidebarButton("关于 OpenDock", symbol: "info.circle", target: "about")
             }.padding(.horizontal, 14)
-            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text("0.1.0").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
+            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.2.0").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
         }.frame(maxHeight: .infinity).background(Color(hex: "F1F1F7"))
     }
 
@@ -127,8 +140,14 @@ struct ManagerView: View {
                 preview(profile)
 
                 HStack {
-                    VStack(alignment: .leading, spacing: 5) { Text("布局中的项目").font(.system(size: 15, weight: .semibold)); Text("拖拽调整顺序 · 右键查看更多操作").font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
+                    VStack(alignment: .leading, spacing: 5) { Text("布局中的项目").font(.system(size: 15, weight: .semibold)); Text("⌘ 点击多选 · ⇧ 点击范围选择 · 拖拽所选项目整体排序").font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
                     Spacer()
+                    if !selectedItems.isEmpty {
+                        Text("已选 \(selectedItems.count)").font(.caption).foregroundStyle(DockTheme.secondary)
+                        Button("复制") { duplicateSelection(in: profile) }.buttonStyle(QuietButtonStyle())
+                        Button("移除") { store.removeItems(selectedItems, from: profile.id); selectedItems = []; selectionAnchor = nil }.buttonStyle(QuietButtonStyle())
+                        Button { selectedItems = []; selectionAnchor = nil } label: { Image(systemName: "xmark.circle") }.buttonStyle(.plain).help("取消选择")
+                    }
                     addMenu(profile).buttonStyle(QuietButtonStyle())
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
@@ -141,7 +160,7 @@ struct ManagerView: View {
                 }
                 HStack(spacing: 10) {
                     Image(systemName: "keyboard").foregroundStyle(DockTheme.accent)
-                    Text("⌘ ⌥ \(min((store.profiles.firstIndex { $0.id == profile.id } ?? 0) + 1, 9))").font(.system(size: 11, weight: .medium, design: .monospaced))
+                    ShortcutRecorder(profileID: profile.id)
                     Text("通过菜单栏或快捷键切换布局").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
                     Spacer()
                     Menu { ForEach(["8B7BF4", "5EAF97", "D49566", "699DCF", "D2799F"], id: \.self) { hex in Button(hex) { store.updateProfile(profile.id) { $0.color = hex } } } } label: { Label("布局颜色", systemImage: "paintpalette") }.menuStyle(.borderlessButton).frame(width: 95)
@@ -159,12 +178,12 @@ struct ManagerView: View {
                 HStack(spacing: 9) {
                     ForEach(profile.items) { item in
                         Group {
-                            if item.kind == .widget { WidgetTile(item: item, compact: false, onUpdate: { store.updateItem($0, profileID: profile.id) }) }
+                            if item.kind == .widget { WidgetTile(item: item, compact: false, onUpdate: { store.updateItem($0, profileID: profile.id) }, onDuplicate: { store.duplicateItem(item, in: profile.id) }, forceVisible: true) }
                             else if item.kind == .spacer { Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 38).padding(.horizontal, 4) }
                             else { AppIconView(item: item, size: 44).help(item.title) }
                         }
-                        .onDrag { dragging = item.id; return NSItemProvider(object: item.id.uuidString as NSString) }
-                        .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store))
+                        .onDrag { beginDrag(item.id); return NSItemProvider(object: item.id.uuidString as NSString) }
+                        .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
                     }
                     if profile.items.isEmpty { Text("添加应用，开始打造你的 Dock").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).padding(18) }
                 }.padding(12)
@@ -187,20 +206,48 @@ struct ManagerView: View {
             if let widget = item.widget { Image(systemName: widget.symbol).font(.system(size: 25, weight: .light)).foregroundStyle(DockTheme.accent).frame(height: 44) }
             else if item.kind == .spacer { Image(systemName: "rectangle.split.2x1").font(.system(size: 22, weight: .light)).foregroundStyle(DockTheme.secondary).frame(height: 44) }
             else { AppIconView(item: item, size: 44) }
-            Text(item.title.isEmpty ? "分隔符" : item.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
+            Text(item.title.isEmpty ? item.widget?.title ?? (item.kind == .spacer ? "分隔符":"未命名项目") : item.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
             Text(item.widget?.category ?? (item.kind == .app ? "应用" : item.kind == .appGroup ? "应用分组" : item.kind == .folder ? "文件夹" : item.kind == .link ? "链接" : item.kind == .spacer ? "留白" : "文件")).font(.system(size: 9)).foregroundStyle(DockTheme.secondary)
-        }.frame(maxWidth: .infinity).frame(height: 120).background(Color.white).clipShape(RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(DockTheme.line))
-            .onDrag { dragging = item.id; return NSItemProvider(object: item.id.uuidString as NSString) }
-            .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store))
+        }.frame(maxWidth: .infinity).frame(height: 120).background(selectedItems.contains(item.id) ? DockTheme.accent.opacity(0.08) : Color.white).clipShape(RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedItems.contains(item.id) ? DockTheme.accent : DockTheme.line, lineWidth: selectedItems.contains(item.id) ? 2 : 1))
+            .overlay(alignment: .topTrailing) { if selectedItems.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(DockTheme.accent).padding(9) } }
+            .contentShape(RoundedRectangle(cornerRadius: 13))
+            .onTapGesture(count: 2) { edit(item, profile: profile) }
+            .onTapGesture { select(item.id, in: profile) }
+            .accessibilityAddTraits(selectedItems.contains(item.id) ? .isSelected : [])
+            .onDrag { beginDrag(item.id); return NSItemProvider(object: item.id.uuidString as NSString) }
+            .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
             .contextMenu {
                 if item.kind != .spacer && item.kind != .widget { Button("打开") { AppService.open(item) } }
-                Button("复制") { var copy = item; copy.id = UUID(); store.addItems([copy], to: profile.id) }
+                if item.kind != .spacer { Button("编辑名称与图标…") { edit(item, profile: profile) } }
+                Button(actionIDs(item).count > 1 ? "复制所选项目" : "复制") { duplicateSelection(in: profile, fallback: item) }
                 Button("向前移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i > 0 { p.items.swapAt(i, i - 1) } } }
                 Button("向后移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i + 1 < p.items.count { p.items.swapAt(i, i + 1) } } }
                 Divider()
-                Button("移除", role: .destructive) { store.updateProfile(profile.id) { $0.items.removeAll { $0.id == item.id } } }
+                Button(actionIDs(item).count > 1 ? "移除所选项目" : "移除", role: .destructive) { let ids = actionIDs(item); store.removeItems(ids, from: profile.id); selectedItems.subtract(ids) }
             }
     }
+
+    private func select(_ id: UUID, in profile: DockProfile) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.shift), let anchor = selectionAnchor, let start = profile.items.firstIndex(where: { $0.id == anchor }), let end = profile.items.firstIndex(where: { $0.id == id }) {
+            let range = Set(profile.items[min(start, end)...max(start, end)].map(\.id))
+            if flags.contains(.command) { selectedItems.formUnion(range) } else { selectedItems = range }
+        } else if flags.contains(.command) {
+            if selectedItems.contains(id) { selectedItems.remove(id) } else { selectedItems.insert(id) }
+            selectionAnchor = id
+        } else { selectedItems = [id]; selectionAnchor = id }
+    }
+    private func beginDrag(_ id: UUID) {
+        if !selectedItems.contains(id) { selectedItems = [id]; selectionAnchor = id }
+        dragging = id
+    }
+    private func actionIDs(_ item: DockItem) -> Set<UUID> { selectedItems.contains(item.id) ? selectedItems : [item.id] }
+    private func duplicateSelection(in profile: DockProfile, fallback: DockItem? = nil) {
+        let ids = fallback.map(actionIDs) ?? selectedItems
+        let copies = profile.items.filter { ids.contains($0.id) }.map(AppStore.independentCopy)
+        store.addItems(copies, to: profile.id); selectedItems = Set(copies.map(\.id)); selectionAnchor = copies.first?.id
+    }
+    private func edit(_ item: DockItem, profile: DockProfile) { editingProfileID = profile.id; editingItem = item }
     private func addMenu(_ profile: DockProfile) -> some View {
         Menu {
             Button("应用…") { store.addItems(AppService.chooseItems(kind: .app)) }
@@ -238,7 +285,7 @@ struct ManagerView: View {
             Text("OpenDock").font(.system(size: 32, weight: .semibold))
             Text("你的桌面，由你安排。").font(.system(size: 14)).foregroundStyle(DockTheme.secondary)
             Text("原生 macOS · 开源 · 无账号 · 无遥测").font(.system(size: 11)).foregroundStyle(DockTheme.accent)
-            Text("v0.1.0 Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
+            Text("v" + (Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.2.0") + " Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
             Link("查看源代码 ↗", destination: URL(string: "https://github.com/myh66/opendock")!).padding(.top, 10)
             Text("基于 Dockset 公开功能说明独立实现。\nOpenDock 与 Dockset 及其开发者无关联。")
                 .font(.system(size: 11)).foregroundStyle(DockTheme.secondary).multilineTextAlignment(.center).padding(.top, 25)
@@ -251,7 +298,12 @@ struct ItemReorderDelegate: DropDelegate {
     let profileID: UUID
     @Binding var dragging: UUID?
     let store: AppStore
-    func dropEntered(info: DropInfo) { if let dragging { store.moveItem(dragging, before: itemID, in: profileID) } }
+    var selection: Binding<Set<UUID>>? = nil
+    func dropEntered(info: DropInfo) {
+        guard let dragging else { return }
+        if let ids = selection?.wrappedValue, ids.contains(dragging), ids.count > 1 { store.moveItems(ids, to: itemID, in: profileID) }
+        else { store.moveItem(dragging, before: itemID, in: profileID) }
+    }
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
     func performDrop(info: DropInfo) -> Bool { dragging = nil; return true }
 }

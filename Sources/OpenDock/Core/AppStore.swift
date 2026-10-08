@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppStore: ObservableObject {
-    static let shared = AppStore()
+    static let shared = AppStore(storageURL: ProcessInfo.processInfo.arguments.contains("--ui-test") ? ProcessInfo.processInfo.environment["OPENDOCK_TEST_ARCHIVE"].map { URL(fileURLWithPath: $0) } : nil)
     @Published var archive: DockArchive { didSet { persist() } }
     @Published var selectedID: UUID?
     @Published var errorMessage: String?
@@ -14,8 +14,12 @@ final class AppStore: ObservableObject {
     @Published var widgetLibraryPresented = false
     @Published var settingsPresented = false
     @Published var requestedPage: String?
+    @Published var tourPresented = false
     let nativeService = NativeDockService()
     private var persistenceBlocked = false
+    private var pendingNativeOperations = 0
+    private var lastNativeChange = Date.distantPast
+    private var nativeWatchTimer: Timer?
     let storageURL: URL
 
     var profiles: [DockProfile] { archive.profiles }
@@ -35,7 +39,7 @@ final class AppStore: ObservableObject {
         if FileManager.default.fileExists(atPath: self.storageURL.path) {
             do { loaded = try JSONDecoder().decode(DockArchive.self, from: Data(contentsOf: self.storageURL)).validated() }
             catch {
-                let backup = self.storageURL.deletingLastPathComponent().appendingPathComponent("layouts-unreadable-\(Int(Date().timeIntervalSince1970)).json")
+                let backup = self.storageURL.deletingLastPathComponent().appendingPathComponent("layouts-unreadable-\(UUID().uuidString).json")
                 do {
                     try FileManager.default.copyItem(at: self.storageURL, to: backup)
                     loadError = "布局文件无法读取，已保留副本：\(backup.lastPathComponent)。\n\(error.localizedDescription)"
@@ -111,12 +115,14 @@ final class AppStore: ObservableObject {
     }
     func duplicate(_ profile: DockProfile) {
         var copy = profile; copy.id = UUID(); copy.name += " 副本"
-        copy.items = copy.items.map { item in var item = item; item.id = UUID(); return item }
+        copy.shortcut = nil
+        copy.items = copy.items.map(Self.independentCopy)
         archive.profiles.append(copy); selectedID = copy.id
     }
     func deleteProfile(_ id: UUID) {
         guard archive.profiles.count > 1 else { return }
         guard !applyingNative || profiles.first(where: { $0.id == id })?.kind != .native else { return }
+        for item in profiles.first(where: { $0.id == id })?.items ?? [] { LocalWidgetNotifications.shared.cancelAll(id: item.id) }
         var updated = archive
         updated.profiles.removeAll { $0.id == id }
         if updated.activeCustomID == id { updated.activeCustomID = updated.profiles.first { $0.kind == .custom }?.id }
@@ -125,27 +131,75 @@ final class AppStore: ObservableObject {
         if selectedID == id { selectedID = updated.profiles.first?.id }
     }
     func activate(_ profile: DockProfile) {
-        if profile.kind == .custom {
-            archive.activeCustomID = profile.id
-            archive.settings.showCustomDock = true
-            notice = "已切换到「\(profile.name)」。"
+        if profile.kind == .custom { applyCustom(profile) }
+        else { Task { do { try await activateAndWait(profile) } catch { errorMessage = error.localizedDescription } } }
+    }
+    private func applyCustom(_ profile: DockProfile) {
+        guard profiles.contains(where: { $0.id == profile.id && $0.kind == .custom }) else { return }
+        var updated = archive
+        updated.activeCustomID = profile.id; updated.settings.showCustomDock = true
+        if updated.settings.mode == .nativeOnly { updated.settings.mode = .both }
+        archive = updated
+        notice = "已切换到「\(profile.name)」。"
+    }
+    func activateAndWait(_ profile: DockProfile) async throws {
+        guard let saved = profiles.first(where: { $0.id == profile.id }) else { throw ArchiveError.invalidProfiles }
+        if saved.kind == .custom {
+            applyCustom(saved)
         } else {
-            guard !applyingNative else { return }
-            applyingNative = true
-            Task {
-                defer { applyingNative = false }
-                do { try await nativeService.apply(profile); archive.activeNativeID = profiles.contains(where: { $0.id == profile.id }) ? profile.id : nil; notice = "系统 Dock 已切换到「\(profile.name)」。" }
-                catch { errorMessage = error.localizedDescription }
-            }
+            pendingNativeOperations += 1; applyingNative = true
+            defer { pendingNativeOperations -= 1; applyingNative = pendingNativeOperations > 0; lastNativeChange = Date() }
+            try await nativeService.apply(saved, smooth: settings.smoothNativeSwitch)
+            archive.activeNativeID = profiles.contains(where: { $0.id == saved.id }) ? saved.id : nil
+            notice = "系统 Dock 已切换到「\(saved.name)」。"
         }
     }
     func restoreNative() {
-        guard !applyingNative else { return }
-        applyingNative = true
+        pendingNativeOperations += 1; applyingNative = true
         Task {
-            defer { applyingNative = false }
+            defer { pendingNativeOperations -= 1; applyingNative = pendingNativeOperations > 0; lastNativeChange = Date() }
             do { try await nativeService.restoreLastBackup(); archive.activeNativeID = nil; notice = "已恢复上次切换前的系统 Dock。" }
             catch { errorMessage = error.localizedDescription }
+        }
+    }
+    func startNativeObservation() {
+        nativeWatchTimer?.invalidate()
+        nativeWatchTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.saveNativeChangesIfNeeded() }
+        }
+        nativeWatchTimer?.tolerance = 1
+    }
+    func stopNativeObservation() { nativeWatchTimer?.invalidate(); nativeWatchTimer = nil }
+    func saveNativeChangesIfNeeded() {
+        guard settings.autoSaveNativeChanges, !applyingNative, Date().timeIntervalSince(lastNativeChange) > 3,
+              let id = archive.activeNativeID, let profile = profiles.first(where: { $0.id == id }),
+              let current = try? nativeService.captureProfile(name: profile.name) else { return }
+        // IDs in a capture are fresh; compare serialized native tiles/order instead.
+        let old = try? NativeDockService.tiles(for: profile.items)
+        let new = try? NativeDockService.tiles(for: current.items)
+        guard let old, let new, !NSArray(array: old).isEqual(to: new) else { return }
+        updateProfile(id) { $0.items = current.items }
+        notice = "已自动保存 macOS Dock 的固定应用变化。"
+    }
+    static func independentCopy(_ original: DockItem) -> DockItem {
+        var copy = original; copy.id = UUID()
+        // Notification requests are tied to item identity and are explicitly enabled per copy.
+        for key in ["alarmEnabled", "waterReminder", "timerNotification"] where copy.configuration[key] != nil { copy.configuration[key] = "false" }
+        return copy
+    }
+    func duplicateItem(_ item: DockItem, in profileID: UUID) { addItems([Self.independentCopy(item)], to: profileID) }
+    func removeItems(_ ids: Set<UUID>, from profileID: UUID) {
+        for id in ids { LocalWidgetNotifications.shared.cancelAll(id: id) }
+        updateProfile(profileID) { $0.items.removeAll { ids.contains($0.id) } }
+    }
+    func moveItems(_ ids: Set<UUID>, to targetID: UUID?, in profileID: UUID) {
+        updateProfile(profileID) { profile in
+            guard targetID.map({ !ids.contains($0) }) ?? true else { return }
+            let moved = profile.items.filter { ids.contains($0.id) }
+            guard !moved.isEmpty else { return }
+            profile.items.removeAll { ids.contains($0.id) }
+            let insertion = targetID.flatMap { target in profile.items.firstIndex { $0.id == target } } ?? profile.items.count
+            profile.items.insert(contentsOf: moved, at: insertion)
         }
     }
     func cycleCustom(direction: Int) {
