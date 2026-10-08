@@ -7,8 +7,8 @@ struct OpenDockApp: App {
     @NSApplicationDelegateAdaptor(OpenDockDelegate.self) private var delegate
     @StateObject private var store = AppStore.shared
     var body: some Scene {
-        WindowGroup("OpenDock", id: "manager") {
-            ManagerWindowContent(delegate: delegate).environmentObject(store).onOpenURL { store.handleURL($0) }
+        Window("OpenDock", id: "manager") {
+            ManagerWindowContent(delegate: delegate).environmentObject(store)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1100, height: 760)
@@ -82,6 +82,9 @@ final class OpenDockDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { AppStore.shared.handleURL(url) }
+    }
     func showManager() {
         managerOpener?()
         if let window = NSApp.windows.first(where: { $0.title == "OpenDock" && !($0 is NSPanel) }) { window.makeKeyAndOrderFront(nil) }
