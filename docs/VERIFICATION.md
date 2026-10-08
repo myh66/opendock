@@ -6,8 +6,9 @@
 
 | 检查 | 结果与范围 |
 | --- | --- |
-| 完整单元测试 | **84 项通过，0 失败**。归档迁移、稳定排序、通知独立身份、原生序列化/FIFO、模式备份校验、窗口缓存、CPU/网络 delta、存储、商业口径、AI 数据与子进程协议。 |
+| 完整单元测试 | **91 项通过，0 失败**（本机 Swift 6.4，6.626 秒）。桥接修正阶段的 84 项套件连续两次通过（9.60 秒、7.78 秒）；新增股票区间和外设电池共 7 项后完成最终整套复测。归档迁移、稳定排序、通知独立身份、原生序列化/FIFO、模式备份校验、窗口缓存、CPU/网络 delta、存储、商业口径、AI 数据与子进程协议、股票区间涨跌/数值边界、外设满电优先/设备去重。 |
 | 子进程专项复测 | **9 项通过**。分段 stdin/JSONL、只读握手、重复初始化、输入上限、取消、SIGTERM 忽略后的 SIGKILL。仅使用临时合成脚本。修复执行计时在 macOS 启动完成前提前耗尽的问题。 |
+| CLI 环境隔离 | 合成 fixture 验证剔除 SwiftPM/XCTest 的动态库加载与测试注入变量（`DYLD_`、`__XPC_DYLD_`、`XCTest`、`XCTEST_`、`XCInject`、`__XCODE_BUILT_PRODUCTS_DIR_PATHS`、`LLVM_PROFILE_FILE`），保留普通 CLI 登录、代理、配置和 PATH 环境；未执行个人已登录 CLI。 |
 | Claude Desktop 合成测试 | 5 项包含在完整测试：独立 PBKDF2/AES 向量、Chromium v23/v24 域绑定、过期/冲突会话、SQLite 字段过滤、数值额度。未访问个人 Cookies 或钥匙串。 |
 | 调试和 Release 构建 | Swift 6.4，arm64，macOS 13 编译目标通过。 |
 | App Intents 打包 | `appintentsmetadataprocessor` 成功生成 `Metadata.appintents`；提取包含布局 Entity/Query、Switch Intent、Focus Filter 与 App Shortcuts。尚未配置用户的真实 Focus 自动化。 |
@@ -15,6 +16,7 @@
 | 实际界面 | 管理页、关于版本号、设置和 Liquid Glass 选项；自定义布局应用、时钟弹窗/Escape；AI 圆环和逐额度设置；⌘W 关闭 AI 弹窗且管理窗保留；空标题组件显示正确名称。 |
 | 股票真实联网 | Yahoo 公开行情返回并显示股票名称、币种、一个月价格历史及成交量图；该端点无稳定 API 保证。 |
 | AI 界面数据 | 使用明确标注的合成数值缓存验收显示；未连接个人供应商账户，不代表真实额度查询已验证。 |
+| 外设电池 | 3 项合成 fixture 通过，覆盖容量校验、满电/充电冲突、未知状态与同一设备节点去重。本机只读查询返回 0 个外设电量源，尚无真实配件充电验证。 |
 | 原生 Dock 保留 | 测试前后 `persistent-apps` 内容与 autohide/延迟/动画设置一致，固定项目 **39 个**。测试未应用或重启用户 Dock。 |
 | 签名和封装 | Info.plist 与 ad hoc `codesign --verify --strict` 通过；DMG 创建及 `hdiutil verify` 通过；ZIP 和 DMG 附 SHA-256。 |
 
@@ -33,4 +35,4 @@
 
 ## 持续集成
 
-公开仓库工作流执行构建、测试、带 App Intents 元数据的应用封装与 ZIP 保存。历史初版的 [CI](https://github.com/myh66/opendock/actions/runs/37712447779) 已通过；本版以对应提交的 [Actions](https://github.com/myh66/opendock/actions) 记录为准。CI 使用 macOS 15；运行器架构与本机包分别记录。
+公开仓库工作流执行构建、91 项测试、带 App Intents 元数据的应用封装与 ZIP 保存，结果见对应提交的 [Actions](https://github.com/myh66/opendock/actions)。CI 使用 macOS 15 arm64、Apple Swift 6.1.2；本机使用 Swift 6.4。打包脚本按编译器能力选择常量提取参数，并验证切换 action、Focus Filter、布局 entity 与 App Shortcut；历史初版结果不能替代本版发布检查。

@@ -13,7 +13,7 @@ This is an independent implementation inspired by Dockset's publicly documented 
 - Menu bar and global keyboard switching, JSON import/export, and backups before native Dock changes.
 - Twenty-five widgets, including alarms, weather forecasts, network activity, stocks/watchlists, Stripe, Paddle, Shopify, AI Limits, and AI Activity.
 - Native Focus Filters and Shortcuts, configurable per-profile hotkeys, group selection/reordering, window preview caching, and checked GitHub updates.
-- Seven AI providers with explicitly connected sources, read-only quota queries, local activity, shared connections, display styles, and date ranges.
+- Seven AI quota providers with explicit connections, read-only queries, shared connections, and display styles. AI Activity supports Codex, Claude, Cursor, and Grok, with source-specific counters and date ranges.
 
 Version 0.2.0 is a development Beta. The [feature matrix](docs/PARITY.md), [integration guide](docs/INTEGRATIONS.md), and [verification record](docs/VERIFICATION.md) distinguish implementation from actual account and device testing. Financial and AI accounts, system permissions, full-screen/multi-Space behavior, and installation updates have not all been tested end to end.
 

@@ -19,15 +19,39 @@ if ! xcrun --find appintentsmetadataprocessor >/dev/null 2>&1; then
   exit 1
 fi
 mkdir -p "$BUILD_ROOT"
-swift build -c release -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-list -Xswiftc -Xfrontend -Xswiftc "$PROJECT_ROOT/scripts/app-intents-protocols.json" -Xswiftc -emit-const-values-path -Xswiftc "$BUILD_ROOT/OpenDock-release.swiftconstvalues"
-BIN_ROOT="$(swift build -c release --show-bin-path)"
+SWIFT_COMPILER="${SWIFT_EXEC:-$(xcrun --find swiftc)}"
+SWIFT_FRONTEND_HELP="$("$SWIFT_COMPILER" -frontend -help-hidden)"
+# Swift 6.1 uses -file; newer toolchains also accept -list. Detect the
+# selected compiler rather than assuming the host OS determines its flags.
+# https://github.com/swiftlang/swift/blob/swift-6.1.2-RELEASE/include/swift/Option/FrontendOptions.td
+if grep -Eq '^[[:space:]]+-const-gather-protocols-file([[:space:]]|$)' <<< "$SWIFT_FRONTEND_HELP"; then
+  CONST_PROTOCOL_FLAG="-const-gather-protocols-file"
+elif grep -Eq '^[[:space:]]+-const-gather-protocols-list([[:space:]]|$)' <<< "$SWIFT_FRONTEND_HELP"; then
+  CONST_PROTOCOL_FLAG="-const-gather-protocols-list"
+else
+  echo "The selected Swift compiler cannot extract App Intents constants. Select a compatible Xcode 16+ toolchain." >&2
+  exit 1
+fi
+if ! grep -Eq '^[[:space:]]+-emit-const-values-path([[:space:]]|$)' <<< "$SWIFT_FRONTEND_HELP"; then
+  echo "The selected Swift compiler does not support -emit-const-values-path." >&2
+  exit 1
+fi
+echo "Extracting App Intents constants with $CONST_PROTOCOL_FLAG"
+# WMO keeps the supplementary const-values output in this explicit path;
+# separate compilation can otherwise place it in temporary per-file outputs.
+xcrun swift build -c release \
+  -Xswiftc -whole-module-optimization \
+  -Xswiftc -Xfrontend -Xswiftc "$CONST_PROTOCOL_FLAG" \
+  -Xswiftc -Xfrontend -Xswiftc "$PROJECT_ROOT/scripts/app-intents-protocols.json" \
+  -Xswiftc -emit-const-values-path -Xswiftc "$BUILD_ROOT/OpenDock-release.swiftconstvalues"
+BIN_ROOT="$(xcrun swift build -c release --show-bin-path)"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BIN_ROOT/OpenDock" "$APP_PATH/Contents/MacOS/OpenDock"
 chmod +x "$APP_PATH/Contents/MacOS/OpenDock"
 
 ICONSET_PATH="$BUILD_ROOT/OpenDock.iconset"
 mkdir -p "$ICONSET_PATH"
-swift "$PROJECT_ROOT/scripts/make-icon.swift" "$ICONSET_PATH"
+xcrun swift "$PROJECT_ROOT/scripts/make-icon.swift" "$ICONSET_PATH"
 iconutil -c icns "$ICONSET_PATH" -o "$APP_PATH/Contents/Resources/OpenDock.icns"
 
 cat > "$APP_PATH/Contents/Info.plist" <<PLIST

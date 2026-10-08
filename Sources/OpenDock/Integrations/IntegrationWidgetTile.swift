@@ -263,9 +263,9 @@ struct IntegrationWidgetTile:View {
                 if let report = selectedStock {
                     Text(report.name).font(.headline)
                     Text(report.current.map { $0.formatted(.number.precision(.fractionLength(2))) + " " + report.currency } ?? "—").font(.system(size:30,weight:.semibold))
-                    if config["compare"] == "true",runtime.stocks.count > 1 { comparisonChart }
-                    else { chart(report.points,color:DockTheme.accent); if config["showVolume"] != "false",report.points.contains(where: { $0.volume != nil }) { Chart(sampled(report.points.filter { $0.volume != nil })) { point in BarMark(x:.value("时间",point.date),y:.value("成交量",point.volume ?? 0)).foregroundStyle(DockTheme.accent.opacity(0.35)) }.frame(height:70) } }
-                    if let hovered { Text(hovered.date.formatted(date:.abbreviated,time:.shortened) + " · " + hovered.value.formatted(.number.precision(.fractionLength(2)))).font(.caption.monospacedDigit()) }
+                    if config["compare"] == "true",runtime.stocks.count > 1 { Text("多股票相对变化").font(.caption.weight(.semibold)); comparisonChart }
+                    StockHistoryChart(report:report,dither:config["dither"] == "true",showVolume:config["showVolume"] != "false")
+                        .id(report.symbol + "|" + report.range + "|" + report.source)
                     Text(report.note + (report.points.count > 500 ? " 图表按整个范围抽样，原始数据保持完整。":"")).font(.caption).foregroundStyle(.secondary)
                     Text("\(report.source) · 更新于 \(report.fetchedAt.formatted(date:.abbreviated,time:.shortened))").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -501,4 +501,172 @@ struct IntegrationWidgetTile:View {
     private func boolBinding(_ key:String,default value:Bool)->Binding<Bool> { Binding(get:{config[key].map { $0 == "true" } ?? value},set:{set(key,String($0))}) }
 }
 private struct StockMatch:Identifiable { var id:String { symbol };var symbol:String;var name:String }
+
+/// Keep chart interaction state independent from the tile's credential/configuration state.
+private struct StockHistoryChart: View {
+    let report: StockReport
+    let dither: Bool
+    let showVolume: Bool
+    private let points: [IntegrationPoint]
+    @State private var hovered: IntegrationPoint?
+    @State private var dragAnchor: IntegrationPoint?
+    @State private var selection: StockChartSelection?
+    @State private var showDateControls = false
+
+    init(report: StockReport, dither: Bool, showVolume: Bool) {
+        self.report = report; self.dither = dither; self.showVolume = showVolume
+        points = StockChartSelection.orderedPoints(report.points)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if points.isEmpty { Text("没有可比较的有效价格记录。").font(.caption).foregroundStyle(.secondary) }
+            else {
+                priceChart
+                if showVolume, !volumePoints.isEmpty { volumeChart }
+                hoverReadout
+                comparisonReadout
+                dateControls
+            }
+        }.onChange(of: report.points) { _ in refreshSelection() }
+    }
+
+    private var priceChart: some View {
+        Chart {
+            ForEach(sample(points)) { point in
+                if dither { PointMark(x: .value("时间", point.date), y: .value("价格", point.value)).symbolSize(8).foregroundStyle(DockTheme.accent) }
+                else { LineMark(x: .value("时间", point.date), y: .value("价格", point.value)).foregroundStyle(DockTheme.accent) }
+            }
+            if let selection {
+                RuleMark(x: .value("起点", selection.start.date)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.secondary)
+                RuleMark(x: .value("终点", selection.end.date)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(.secondary)
+                PointMark(x: .value("起点", selection.start.date), y: .value("价格", selection.start.value)).symbolSize(38).foregroundStyle(DockTheme.accent)
+                PointMark(x: .value("终点", selection.end.date), y: .value("价格", selection.end.value)).symbolSize(38).foregroundStyle(DockTheme.accent)
+            }
+            if let hovered {
+                RuleMark(x: .value("悬停时间", hovered.date)).foregroundStyle(.secondary.opacity(0.5))
+                PointMark(x: .value("悬停时间", hovered.date), y: .value("价格", hovered.value)).symbolSize(28).foregroundStyle(DockTheme.accent)
+            }
+        }.frame(height: 160)
+            .chartYScale(domain: .automatic(includesZero: false))
+            .chartOverlay { proxy in GeometryReader { geometry in interaction(proxy, frame: geometry[proxy.plotAreaFrame]) } }
+            .accessibilityLabel(report.symbol + " 价格历史")
+            .accessibilityHint("可使用下方的起点、终点日期选择器比较区间。")
+    }
+
+    private func interaction(_ proxy: ChartProxy, frame: CGRect) -> some View {
+        ZStack {
+            if let selection, let start = proxy.position(forX: selection.start.date), let end = proxy.position(forX: selection.end.date) {
+                Rectangle().fill(DockTheme.accent.opacity(0.12))
+                    .frame(width: max(1, abs(end - start)), height: frame.height)
+                    .position(x: frame.minX + (start + end) / 2, y: frame.midY)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+            Rectangle().fill(.clear).contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    guard dragAnchor == nil else { return }
+                    switch phase {
+                    case .active(let location): hovered = frame.contains(location) ? point(at: location, proxy: proxy, frame: frame) : nil
+                    case .ended: hovered = nil
+                    }
+                }
+                .gesture(DragGesture(minimumDistance: 3).onChanged { value in
+                    guard frame.contains(value.startLocation) else { return }
+                    if dragAnchor == nil { dragAnchor = point(at: value.startLocation, proxy: proxy, frame: frame) }
+                    guard let start = dragAnchor, let end = point(at: value.location, proxy: proxy, frame: frame) else { return }
+                    selection = StockChartSelection(start: start, end: end); hovered = end
+                }.onEnded { _ in dragAnchor = nil; hovered = nil })
+        }
+    }
+
+    private func point(at location: CGPoint, proxy: ChartProxy, frame: CGRect) -> IntegrationPoint? {
+        let x = min(frame.width, max(0, location.x - frame.minX))
+        guard let date: Date = proxy.value(atX: x) else { return nil }
+        return StockChartSelection.nearestPoint(to: date, in: points)
+    }
+
+    private var volumePoints: [IntegrationPoint] { points.filter { point in guard let volume = point.volume else { return false }; return volume.isFinite && volume >= 0 } }
+    private var volumeChart: some View {
+        Chart(sample(volumePoints)) { point in
+            BarMark(x: .value("时间", point.date), y: .value("成交量", point.volume ?? 0)).foregroundStyle(DockTheme.accent.opacity(0.35))
+        }.frame(height: 70).accessibilityLabel("成交量历史")
+    }
+
+    @ViewBuilder private var hoverReadout: some View {
+        if let hovered {
+            Text(dateText(hovered.date) + " · " + priceText(hovered.value) + " " + report.currency)
+                .font(.caption.monospacedDigit()).accessibilityLabel("悬停价格")
+        } else { Text("悬停查看价格，拖动选择区间。").font(.caption).foregroundStyle(.secondary) }
+    }
+
+    @ViewBuilder private var comparisonReadout: some View {
+        if let selection {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("区间" + direction(selection.change)).font(.caption.weight(.semibold))
+                    Spacer()
+                    Button("清除") { self.selection = nil; hovered = nil }.buttonStyle(.plain).font(.caption)
+                }
+                Text(changeText(selection)).font(.system(size: 18, weight: .semibold, design: .rounded)).foregroundStyle(changeColor(selection.change))
+                Text(dateText(selection.start.date) + " → " + dateText(selection.end.date)).font(.caption.monospacedDigit())
+                Text("起点 " + priceText(selection.start.value) + " · 终点 " + priceText(selection.end.value) + " " + report.currency + " · " + durationText(selection.duration))
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(DockTheme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .contain).accessibilityLabel("股票区间比较")
+        }
+    }
+
+    @ViewBuilder private var dateControls: some View {
+        if let first = points.first, let last = points.last {
+            DisclosureGroup("用日期选择比较区间", isExpanded: $showDateControls) {
+                VStack(alignment: .leading, spacing: 8) {
+                    DatePicker("起点", selection: dateBinding(starting: true, first: first, last: last), in: first.date...last.date, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("终点", selection: dateBinding(starting: false, first: first, last: last), in: first.date...last.date, displayedComponents: [.date, .hourAndMinute])
+                    Button("比较整个范围") { selection = StockChartSelection(start: first, end: last) }.disabled(points.count < 2)
+                    Text("日期吸附到最近的真实价格记录，按时间先后比较。").font(.caption2).foregroundStyle(.secondary)
+                }.padding(.top, 8)
+            }.font(.caption).disabled(points.count < 2)
+        }
+    }
+
+    private func dateBinding(starting: Bool, first: IntegrationPoint, last: IntegrationPoint) -> Binding<Date> {
+        Binding(get: { starting ? (selection?.start.date ?? first.date) : (selection?.end.date ?? last.date) }, set: { date in
+            let start = starting ? date : (selection?.start.date ?? first.date)
+            let end = starting ? (selection?.end.date ?? last.date) : date
+            selection = StockChartSelection.comparing(points, from: start, to: end); hovered = nil
+        })
+    }
+
+    private func refreshSelection() {
+        if let selection { self.selection = StockChartSelection.comparing(points, from: selection.start.date, to: selection.end.date) }
+        if let hovered { self.hovered = StockChartSelection.nearestPoint(to: hovered.date, in: points) }
+        dragAnchor = nil
+    }
+
+    private func sample(_ values: [IntegrationPoint]) -> [IntegrationPoint] {
+        guard values.count > 500 else { return values }
+        let step = max(1, Int(ceil(Double(values.count) / 499)))
+        var result = Swift.stride(from: 0, to: values.count, by: step).map { values[$0] }
+        if result.last?.date != values.last?.date, let last = values.last { result.append(last) }
+        return result
+    }
+    private func priceText(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(2))) }
+    private func signed(_ value: Double) -> String { (value > 0 ? "+" : "") + priceText(value) }
+    private func dateText(_ value: Date) -> String { value.formatted(date: .abbreviated, time: .shortened) }
+    private func changeText(_ selection: StockChartSelection) -> String {
+        let amount = selection.change.map(signed) ?? "变化不可计算"
+        let percent = selection.percentChange.map { signed($0) + "%" } ?? "百分比不可计算"
+        return amount + " " + report.currency + " · " + percent
+    }
+    private func direction(_ change: Double?) -> String { guard let change else { return "变化不可计算" }; return change > 0 ? "上涨" : change < 0 ? "下跌" : "持平" }
+    private func changeColor(_ change: Double?) -> Color { guard let change else { return .secondary }; return change > 0 ? .green : change < 0 ? .red : .secondary }
+    private func durationText(_ duration: TimeInterval) -> String {
+        guard duration.isFinite else { return "跨度不可计算" }
+        guard duration > 0 else { return "同一数据点" }
+        let formatter = DateComponentsFormatter(); formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = [.day, .hour, .minute, .second]; formatter.maximumUnitCount = 2
+        return "跨度 " + (formatter.string(from: duration) ?? duration.formatted() + " 秒")
+    }
+}
 private extension String { var nonempty:String? { isEmpty ? nil:self } }

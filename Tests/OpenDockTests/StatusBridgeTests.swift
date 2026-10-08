@@ -58,6 +58,8 @@ final class StatusBridgeTests: XCTestCase {
             XCTAssertFalse(error.localizedDescription.contains("SYNTHETIC_PRIVATE_SENTINEL"))
         }
         XCTAssertThrowsError(try IntegrationStatusBridge.readPayload(from: .nullDevice, maximumBytes: Int.max))
+        let cleaned = StatusBridgeEnvironment.clean(["HOME": "/synthetic", "PATH": "/usr/bin:/bin", "XDG_CONFIG_HOME": "/synthetic/config", "CLI_SYNTHETIC_TOKEN": "preserved", "DYLD_LIBRARY_PATH": "excluded", "DYLD_FRAMEWORK_PATH": "excluded", "DYLD_INSERT_LIBRARIES": "excluded", "__XPC_DYLD_LIBRARY_PATH": "excluded", "XCTestConfigurationFilePath": "excluded", "XCInjectBundleInto": "excluded", "LLVM_PROFILE_FILE": "excluded"])
+        XCTAssertEqual(cleaned, ["HOME": "/synthetic", "PATH": "/usr/bin:/bin", "XDG_CONFIG_HOME": "/synthetic/config", "CLI_SYNTHETIC_TOKEN": "preserved"])
     }
 
     func testPreviousCommandReceivesExactInputAndPreservesOnlyItsStdout() throws {
@@ -75,9 +77,9 @@ final class StatusBridgeTests: XCTestCase {
             let marker = directory.appendingPathComponent("pid")
             let (_, output) = try capturedOutput(in: directory)
             defer { try? output.close() }
-            let executable = try script("trap '' TERM\nprintf '%s' \"$$\" > " + quote(marker.path) + "\nwhile :; do :; done", in: directory)
+            let command = "trap '' TERM; printf '%s' \"$$\" > " + quote(marker.path) + "; while :; do :; done"
             let start = ProcessInfo.processInfo.systemUptime
-            XCTAssertThrowsError(try IntegrationStatusBridge.runPrevious(command: "exec " + quote(executable.path), input: Data(repeating: 65, count: 4_000_000), output: output, timeout: 3, terminationGrace: 0.05))
+            XCTAssertThrowsError(try IntegrationStatusBridge.runPrevious(command: command, input: Data(repeating: 65, count: 4_000_000), output: output, timeout: 3, terminationGrace: 0.05))
             XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 6)
             try assertStopped(marker: marker)
         }

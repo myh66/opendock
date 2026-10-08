@@ -76,6 +76,7 @@ enum IntegrationStatusBridge {
         let process = Process(), pipe = Pipe()
         let child = StatusBridgeChild(timeout: timeout, terminationGrace: terminationGrace)
         process.executableURL = URL(fileURLWithPath: "/bin/sh"); process.arguments = ["-c", command]
+        process.environment = StatusBridgeEnvironment.clean(ProcessInfo.processInfo.environment)
         process.standardInput = pipe; process.standardOutput = output; process.standardError = FileHandle.nullDevice
         defer { child.stop(); try? pipe.fileHandleForWriting.close(); try? pipe.fileHandleForReading.close() }
         do { try process.run() } catch { throw StatusBridgeProcessError.failed }
@@ -110,6 +111,7 @@ enum CodexQuotaCommand {
             guard executable.hasPrefix("/"),FileManager.default.isExecutableFile(atPath:executable) else { throw IntegrationError.invalid("请选择已安装的 Codex 可执行文件。") }
             let process = Process(), input = Pipe(), output = Pipe()
             process.executableURL = URL(fileURLWithPath:executable); process.arguments = ["app-server"]
+            process.environment = StatusBridgeEnvironment.clean(ProcessInfo.processInfo.environment)
             process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
             defer {
                 child.stop()
@@ -163,6 +165,19 @@ enum CodexQuotaCommand {
 }
 
 private enum StatusBridgeProcessError: Error { case timeout, failed }
+
+/// SwiftPM/XCTest can inject dynamic-library search paths into the host. A chosen
+/// CLI must use its own runtime rather than load the application's/tester's libraries.
+/// Ordinary login, proxy, configuration and executable-search variables are preserved.
+enum StatusBridgeEnvironment {
+    static func clean(_ source: [String: String]) -> [String: String] {
+        source.filter { name, _ in
+            !name.hasPrefix("DYLD_") && !name.hasPrefix("__XPC_DYLD_") &&
+            !name.hasPrefix("XCTest") && !name.hasPrefix("XCTEST_") && !name.hasPrefix("XCInject") &&
+            name != "__XCODE_BUILT_PRODUCTS_DIR_PATHS" && name != "LLVM_PROFILE_FILE"
+        }
+    }
+}
 
 /// The detached reader and its parent cancellation handler share one bounded child lifetime.
 private final class StatusBridgeChild: @unchecked Sendable {

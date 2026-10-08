@@ -462,7 +462,23 @@ struct WidgetTile: View {
             if let volts = battery.voltageVolts { Text(String(format: "电压：%.2f V", volts)) }
             if let watts = battery.powerWatts { Text(String(format: "功率：%.1f W", watts)) }
             Text("来自 macOS 电源信息；设备未提供的字段不显示。").font(.caption).foregroundStyle(.secondary)
-        } else { unavailable("未检测到电池", detail: "台式 Mac 或不提供电池信息的设备会显示此状态。", symbol: "powerplug") }
+        } else if metrics.snapshot.accessoryBatteries.isEmpty { unavailable("未检测到电池", detail: "台式 Mac 或不提供电池信息的设备会显示此状态。", symbol: "powerplug") }
+        if !metrics.snapshot.accessoryBatteries.isEmpty {
+            Divider()
+            Text("外设电池").font(.headline)
+            ForEach(metrics.snapshot.accessoryBatteries) { accessory in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(accessory.name).lineLimit(2)
+                        Spacer()
+                        Text(String(format: "%.0f%%", accessory.chargePercent)).monospacedDigit()
+                    }
+                    ProgressView(value: accessory.chargePercent / 100).tint(tint)
+                    Label(accessory.status, systemImage: accessory.isCharging ? "bolt.fill" : "battery.100percent").font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 4)
+            }
+            Text("仅显示 macOS 已提供电量的已连接外设。").font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder private var systemControls: some View {
@@ -749,7 +765,7 @@ struct WidgetTile: View {
             if config["waterGoalUnit"] == "drinks" { return "\(WidgetState.hydration(config).filter { Calendar.current.isDate(Date(timeIntervalSince1970: $0.timestamp), inSameDayAs: date) }.count) 杯" }
             return "\(WidgetState.hydrationTotal(WidgetState.hydration(config), at: date)) ml"
         case .note: return (config["note"] ?? "").isEmpty ? "记下想法" : String((config["note"] ?? "").split(separator: "\n").first ?? "便签")
-        case .battery: return metrics.snapshot.battery.map { String(format: "%.0f%%", $0.chargePercent) } ?? "电源状态"
+        case .battery: return metrics.snapshot.battery.map { String(format: "%.0f%%", $0.chargePercent) } ?? metrics.snapshot.accessoryBatteries.first.map { String(format: "%.0f%%", $0.chargePercent) } ?? "电源状态"
         case .system: return metrics.snapshot.cpuHasSample ? String(format: "CPU %.0f%%", metrics.snapshot.cpuTotal * 100) : "系统状态"
         case .timeProgress: return String(format: "今天 %.0f%%", WidgetState.progress(.day, at: date) * 100)
         case .weather: return Double(config["weatherTemperature"] ?? "").map { String(format: "%.0f%@", $0, weatherTemperatureUnit) } ?? "选择城市"

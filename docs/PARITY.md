@@ -31,7 +31,7 @@
 | 不可读配置备份 | `implemented` | 先保存恢复副本；副本失败则暂停写入，不修改系统 Dock。 |
 | 添加应用/文件/文件夹/链接 | `implemented` | 选择器与外部拖入；原生只允许 app/spacer。 |
 | 删除/拖动/复制 | `source tested` | 前后方向排序、唯一 ID fixture 通过；组件副本解除通知开关。 |
-| ⌘/⇧ 多选、组移动 | `implemented` | Manager 多选与组排序；`ParityCoreTests` 有纯测试，等待完整套件结果。 |
+| ⌘/⇧ 多选、组移动 | `source tested` | Manager 多选与组排序；`ParityCoreTests` 纯函数 fixture 已包含在 84 项完整测试中。 |
 | 小/普通分隔符 | `source tested` | 配置及原生 tile 序列化分别保留大小。 |
 | App Folder 应用组 | `implemented` | 名称、颜色、应用成员编辑；点击展开应用选择。 |
 | 文件夹名称/颜色/字母 | `source tested` | 绘制 fixture 通过，名称显示可设置；只改变 OpenDock 配置。 |
@@ -98,7 +98,7 @@
 | Now Playing | `implemented · account required` | Music/Spotify AppleEvents 信息/控制/关闭隐藏；未授权实播。 |
 | Shortcut | `implemented` | 用户指定 Shortcut 运行，内容由其决定。 |
 | AirDrop | `implemented` | 拖入文件/链接、系统分享选择收件人；未设备传输。 |
-| Battery | `implemented` | IOPS 电量/供电，设备提供时健康/循环/电压/电流/功率；缺失不可用。 |
+| Battery | `implemented` | IOPS Mac 电量/供电，设备提供时健康/循环/电压/电流/功率；已连接 HID 外设电量和充电状态，已充满优先，缺失不可用。 |
 | Network Activity | `source tested` | 接口计数 delta/地址/up；reset fixture，无抓包。 |
 | System Activity CPU | `source tested` | Mach per-core ticks、delta；rollover/首次无样本 fixture。 |
 | System Activity 内存/系统 | `implemented` | VM、压力、swap、load average、thermal、uptime。 |
@@ -110,7 +110,7 @@
 | Shopify | `implemented · account required` | OAuth+GraphQL 当前订单金额/数目/AOV/商品/来源；分页不足报错，来源不冒充访客流量。 |
 | AI Limits | `implemented · account required` | 七 provider，共享连接、Numbers/Rings/Bars、Used/Remaining、顺序与首选额度。 |
 | AI Activity | `implemented · account required` | Today/L7/L30/MTD，独立 Limits，本地/账号来源和估算说明。 |
-| 组件复制/稳定弹窗/滚动 | `implemented` | 独立 ID、设置保留、同一项再次关闭、ScrollView、Escape/⌘W；屏幕定位待 UI 验证。 |
+| 组件复制/稳定弹窗/滚动 | `implemented` | 独立 ID、设置保留、同一项再次关闭、ScrollView、Escape/⌘W；时钟/AI 弹窗关闭流程已有 UI 证据，其余组件及多屏定位仍待实际验证。 |
 | 减少闲置查询/重绘 | `implemented` | 系统 shared lease 最后组件卸载停止；暂停 timeline 不每秒重绘；未性能基准。 |
 
 ## AI 提供商
@@ -141,7 +141,7 @@
 | AI popout 单额度显隐 | `implemented` | 每个 allowance 可切换弹窗显示，Dock 首选额度独立。 |
 | 取消 provider Show 断开 bridge | `implemented` | Claude/Antigravity 取消显示时恢复旧 bridge（匹配才恢复），Claude Desktop 内存读取停止。 |
 | AI Activity 三种独立视图 | `implemented` | Sparkline/Bars/Totals，provider 及时间范围独立。 |
-| 股票拖动读值 | `implemented` | hover 和 DragGesture 取图表对应时间读值。 |
+| 股票拖动读值 | `implemented` | hover 检查价格；拖动吸附原始观测两端，比较金额、百分比与跨度，按时间先后处理反向拖动；支持键盘日期选择，4 项 fixture 通过。 |
 | 全屏边缘 dwell | `implemented` | 已有 0.2 秒边缘计时；真实全屏/原生 Dock 优先级仍待运行验证。 |
 | 任意 Space 确定跳转 | `unavailable` | 公共 AX 激活为尽力恢复，不使用 private SkyLight/CGS。 |
 | Apple WidgetKit 导入 | `unavailable` | 与公开产品范围一样，只支持内置组件。 |

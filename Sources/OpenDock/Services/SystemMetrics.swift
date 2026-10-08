@@ -46,6 +46,7 @@ struct SystemMetricsSnapshot: Sendable {
     var thermalState = "无法读取"
     var uptime: TimeInterval = 0
     var battery: BatteryMetrics?
+    var accessoryBatteries: [AccessoryBatteryMetrics] = []
     var network: [NetworkInterfaceMetrics] = []
 }
 
@@ -59,6 +60,7 @@ final class SystemMetrics: ObservableObject {
     private var previousCPU: [CPUTicks] = []
     private var previousNetwork: [String: NetworkInterfaceMetrics] = [:]
     private var previousUptime: TimeInterval?
+    private var accessorySampleUptime: TimeInterval?
 
     func start() {
         guard timer == nil else { return }
@@ -67,7 +69,7 @@ final class SystemMetrics: ObservableObject {
         timer?.tolerance = 0.3
     }
 
-    func stop() { timer?.invalidate(); timer = nil; previousCPU = []; previousNetwork = [:]; previousUptime = nil }
+    func stop() { timer?.invalidate(); timer = nil; previousCPU = []; previousNetwork = [:]; previousUptime = nil; accessorySampleUptime = nil }
 
     func refresh() {
         var value = SystemMetricsSnapshot()
@@ -91,6 +93,10 @@ final class SystemMetrics: ObservableObject {
         @unknown default: value.thermalState = "未知"
         }
         value.battery = Self.readBattery()
+        if accessorySampleUptime.map({ value.uptime - $0 >= 15 }) ?? true {
+            value.accessoryBatteries = AccessoryBatteryReader.read()
+            accessorySampleUptime = value.uptime
+        } else { value.accessoryBatteries = snapshot.accessoryBatteries }
         value.network = Self.readNetwork()
         if let previousUptime {
             let interval = value.uptime - previousUptime
@@ -183,7 +189,9 @@ final class SystemMetrics: ObservableObject {
         let health = design.flatMap { design -> Double? in guard design > 0, let actualMax, actualMax > 100 else { return nil }; return min(100, actualMax / design * 100) }
         let voltage = number("Voltage").map { $0 / 1000 }, amps = (registry["Amperage"] as? NSNumber).map { Double($0.int64Value) / 1000 }
         let watts = voltage.flatMap { volts in amps.map { $0 * volts } }
-        return BatteryMetrics(chargePercent: min(100, max(0, current / maximum * 100)), isCharging: description[kIOPSIsChargingKey] as? Bool ?? false,
+        let percent = min(100, max(0, current / maximum * 100))
+        let charged = description[kIOPSIsChargedKey] as? Bool == true || percent >= 100
+        return BatteryMetrics(chargePercent: percent, isCharging: !charged && (description[kIOPSIsChargingKey] as? Bool ?? false),
                               isOnAC: description[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue,
                               cycleCount: (registry["CycleCount"] as? NSNumber)?.intValue, healthPercent: health, voltageVolts: voltage, currentAmps: amps, powerWatts: watts)
     }
