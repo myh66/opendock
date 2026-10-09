@@ -120,15 +120,62 @@ struct DockGlassGroup<Content: View>: View {
 struct DockGlassButtonStyle: ButtonStyle {
     var prominent = false
     @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.system(size: 12, weight: .medium))
+        let label = configuration.label.font(.system(size: 12, weight: .medium))
             .padding(.horizontal, 15).padding(.vertical, 10)
             .foregroundStyle(prominent ? Color.white : DockTheme.ink)
             .dockGlass(cornerRadius: 12, tint: prominent ? DockTheme.accent : nil, interactive: enabled)
+        return DockSelectableCardBody(label: label, pressed: configuration.isPressed, selected: false, cornerRadius: 12)
+    }
+}
+
+/// Frequent selections use immediate color feedback without moving their contents.
+struct DockSelectableCardStyle: ButtonStyle {
+    var selected = false
+    var cornerRadius: CGFloat = 16
+    var showsSelectionBorder = true
+    func makeBody(configuration: Configuration) -> some View {
+        DockSelectableCardBody(label: configuration.label, pressed: configuration.isPressed,
+                               selected: selected, cornerRadius: cornerRadius, showsSelectionBorder: showsSelectionBorder)
+    }
+}
+
+private struct DockSelectableCardBody<Label: View>: View {
+    let label: Label
+    let pressed: Bool
+    let selected: Bool
+    let cornerRadius: CGFloat
+    var showsSelectionBorder = true
+    @State private var hovered = false
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.isFocused) private var focused
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let emphasized = (selected && showsSelectionBorder) || focused
+        label.contentShape(shape)
+            .overlay(shape.fill(DockTheme.accent.opacity(enabled ? (pressed ? 0.14 : selected ? 0.08 : hovered ? 0.045 : 0) : 0)).allowsHitTesting(false))
+            .overlay(shape.stroke(emphasized ? DockTheme.accent : enabled && hovered ? (contrast == .increased ? Color.primary : DockTheme.line) : .clear,
+                                  lineWidth: emphasized ? 1.5 : 1).allowsHitTesting(false))
             .opacity(enabled ? 1 : 0.45)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
+            .onHover { hovered = $0 }
+    }
+}
+
+struct DockIconButtonStyle: ButtonStyle {
+    var prominent = false
+    var size: CGFloat = 32
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 13, weight: .medium))
+            .frame(width: max(32, size), height: max(32, size))
+            .foregroundStyle(prominent ? DockTheme.accent : DockTheme.ink)
+            .buttonFeedback(pressed: configuration.isPressed)
+    }
+}
+
+private extension View {
+    func buttonFeedback(pressed: Bool) -> some View {
+        DockSelectableCardBody(label: self, pressed: pressed, selected: false, cornerRadius: 10)
     }
 }
 

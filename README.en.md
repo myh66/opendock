@@ -15,7 +15,9 @@ This is an independent implementation inspired by Dockset's publicly documented 
 - Native Focus Filters and Shortcuts, configurable per-profile hotkeys, group selection/reordering, window preview caching, and checked GitHub updates.
 - Seven AI quota providers with explicit connections, read-only queries, shared connections, and display styles. AI Activity supports Codex, Claude, Cursor, and Grok, with source-specific counters and date ranges.
 
-Version 0.3.0 Beta 1 gives the manager, settings, onboarding, and item editor consistent native glass controls, grouped cards, and adaptive layouts. It follows light/dark appearance and system accessibility display settings. Native Liquid Glass requires macOS 26+ and a supporting build toolchain; earlier systems or toolchains use a material fallback.
+Version 0.3.1 Beta 1 gives the manager, settings, onboarding, and item editor consistent native glass controls, grouped cards, and adaptive layouts. It follows light/dark appearance and system accessibility display settings. Native Liquid Glass requires macOS 26+ and a supporting build toolchain; earlier systems or toolchains use a material fallback.
+
+This release applies principles from Emil Kowalski's skills to selection feedback, search, long names, and keyboard actions, and prevents trackpad momentum from repeatedly switching profiles. See the [desktop review](docs/DESKTOP_DESIGN_REVIEW.md).
 
 This is a development Beta. New entries do not provide NetEase playback controls, IBKR trading, Ollama generation/model downloads, or Shadowrocket VPN/node controls. The [feature matrix](docs/PARITY.md), [integration guide](docs/INTEGRATIONS.md), and [verification record](docs/VERIFICATION.md) distinguish implementation from actual account and device testing. Financial and AI accounts, system permissions, full-screen/multi-Space behavior, and installation updates have not all been tested end to end.
 

@@ -18,7 +18,7 @@ struct OpenDockApp: App {
             ManagerWindowContent(delegate: delegate).environmentObject(store)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1100, height: 760)
+        .defaultSize(width: compactUITest ? 940 : 1100, height: compactUITest ? 680 : 760)
         .commands {
             CommandGroup(replacing: .newItem) { Button("新建自定义布局") { store.createProfile(kind: .custom) }.keyboardShortcut("n") }
             CommandGroup(after: .importExport) { Button("导入布局…") { store.importArchive() }; Button("导出布局…") { store.exportArchive() }.keyboardShortcut("e", modifiers: [.command, .shift]) }
@@ -27,6 +27,10 @@ struct OpenDockApp: App {
         MenuBarExtra { DockMenu().environmentObject(store) } label: {
             Label(store.settings.showActiveNameInMenuBar ? (store.settings.mode == .nativeOnly ? store.profiles.first { $0.id == store.archive.activeNativeID }?.name : store.activeCustom?.name) ?? "OpenDock" : "OpenDock", systemImage: "dock.rectangle")
         }
+    }
+    private var compactUITest: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        return arguments.contains("--ui-test") && arguments.contains("--ui-test-compact")
     }
 }
 

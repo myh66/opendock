@@ -15,10 +15,11 @@ struct CustomDockView: View {
     @State private var contentLength: CGFloat = 0
     @State private var itemFrames:[UUID:CGRect] = [:]
     @State private var hoverTimer: Timer?
-    @State private var resizeStart: Double?
+    @State private var resize = DockResizeGestureState()
     @State private var observedProfileID: UUID?
     @State private var displayedItemIDs: [UUID] = []
     @State private var highlightedItemID: UUID?
+    @State private var pendingAddedItemID: UUID?
     @State private var feedbackTask: Task<Void, Never>?
     private var vertical: Bool { store.settings.position != .bottom }
     private var runningExtras: [DockItem] {
@@ -39,7 +40,7 @@ struct CustomDockView: View {
                                     else { HStack(spacing: 8) { items(profile) }.padding(12) }
                                 }.background(GeometryReader { size in Color.clear.preference(key: DockLengthKey.self, value: vertical ? size.size.height : size.size.width) })
                             }.dockScrollBounceBehavior().coordinateSpace(name:"DockScroll").onPreferenceChange(DockLengthKey.self) { contentLength = $0 }
-                            .onPreferenceChange(DockItemFramesKey.self) { itemFrames = $0 }
+                            .onPreferenceChange(DockItemFramesKey.self) { itemFrames = $0; revealAddedItemIfReady(proxy: proxy) }
                             if overflow {
                                 if vertical { VStack { chevron(-1, proxy:proxy,profile:profile,viewport:vertical ? geometry.size.height:geometry.size.width); Spacer(); chevron(1,proxy:proxy,profile:profile,viewport:vertical ? geometry.size.height:geometry.size.width) } }
                                 else { HStack { chevron(-1,proxy:proxy,profile:profile,viewport:vertical ? geometry.size.height:geometry.size.width); Spacer(); chevron(1,proxy:proxy,profile:profile,viewport:vertical ? geometry.size.height:geometry.size.width) } }
@@ -53,13 +54,12 @@ struct CustomDockView: View {
                 HStack(spacing: 5) {
                     Circle().fill(Color(hex: profile.color)).frame(width: 4,height: 4)
                     Text(profile.name).font(.system(size: 9,weight: .medium)).lineLimit(1)
-                    Button { store.settingsPresented = true; openManager() } label: { Image(systemName:"slider.horizontal.3").font(.system(size:10)) }.buttonStyle(.plain).help("设置")
-                    Capsule().fill(.secondary.opacity(0.35)).frame(width: 18,height: 3).padding(5).help("拖动调整图标大小")
+                    Button { store.settingsPresented = true; openManager() } label: { Image(systemName:"slider.horizontal.3").font(.system(size:10)) }.buttonStyle(DockIconButtonStyle(size:28)).help("设置")
+                    Capsule().fill(.secondary.opacity(0.35)).frame(width: 18,height: 3).frame(width:32,height:20).contentShape(Rectangle()).help("拖动调整图标大小")
                         .gesture(DragGesture().onChanged { value in
-                            if resizeStart == nil { resizeStart = store.settings.iconSize; DockInteractionState.shared.resizing = true; popovers.activeID = nil; hoverTimer?.invalidate() }
-                            let delta = vertical ? -value.translation.width : -value.translation.height
-                            store.settings.iconSize = min(80,max(24,(resizeStart ?? 44) + delta / 3))
-                        }.onEnded { _ in resizeStart = nil; DockInteractionState.shared.resizing = false })
+                            if resize.startSize == nil { DockInteractionState.shared.resizing = true; popovers.activeID = nil; cancelAutomaticFeedback() }
+                            store.settings.iconSize = resize.size(currentSize:store.settings.iconSize,translation:value.translation,vertical:vertical)
+                        }.onEnded { _ in resize.end(); DockInteractionState.shared.resizing = false })
                 }.foregroundStyle(.secondary).padding(.bottom,8)
             } else { Button("创建 Dock",action:openManager).padding(20) }
         }
@@ -76,11 +76,12 @@ struct CustomDockView: View {
         }
         .onDrop(of:[.fileURL,.url],isTargeted:nil,perform:receiveExternal)
         .onAppear(perform:refreshRunning)
-        .onDisappear { hoverTimer?.invalidate(); feedbackTask?.cancel(); DockInteractionState.shared.resizing = false; DockInteractionState.shared.dragging = false; DockInteractionState.shared.contentOverflows = false }
-        .onChange(of:store.archive.activeCustomID) { id in itemFrames = [:]; contentLength = 0; hoverTimer?.invalidate(); feedbackTask?.cancel(); highlightedItemID = nil; observedProfileID = id; displayedItemIDs = store.activeCustom?.items.map(\.id) ?? []; dragging = nil; runningDrag = nil; DockInteractionState.shared.dragging = false; popovers.activeID = nil }
+        .onDisappear { cancelAutomaticFeedback(); resize.end(); DockInteractionState.shared.resizing = false; DockInteractionState.shared.dragging = false; DockInteractionState.shared.contentOverflows = false }
+        .onChange(of:store.archive.activeCustomID) { id in itemFrames = [:]; contentLength = 0; cancelAutomaticFeedback(); resize.end(); DockInteractionState.shared.resizing = false; observedProfileID = id; displayedItemIDs = store.activeCustom?.items.map(\.id) ?? []; dragging = nil; runningDrag = nil; DockInteractionState.shared.dragging = false; popovers.activeID = nil }
         .onChange(of:popovers.activeID) { value in if value != nil { hoverTimer?.invalidate() } }
-        .onChange(of:store.settings.position) { _ in itemFrames = [:]; contentLength = 0; hoverTimer?.invalidate(); feedbackTask?.cancel(); highlightedItemID = nil; popovers.activeID = nil }
-        .onReceive(DockInteractionState.shared.$dragging) { active in if !active { dragging = nil; runningDrag = nil } }
+        .onChange(of:store.settings.position) { _ in itemFrames = [:]; contentLength = 0; cancelAutomaticFeedback(); resize.end(); DockInteractionState.shared.resizing = false; popovers.activeID = nil }
+        .onReceive(DockInteractionState.shared.$dragging) { active in if !active { dragging = nil; runningDrag = nil } else { cancelAutomaticFeedback() } }
+        .onReceive(DockInteractionState.shared.$resizing) { active in if !active { resize.end() } else { cancelAutomaticFeedback() } }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.didLaunchApplicationNotification)) { _ in refreshRunning() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.didTerminateApplicationNotification)) { _ in refreshRunning() }
     }
@@ -117,13 +118,20 @@ struct CustomDockView: View {
     private func chevron(_ direction:Int,proxy:ScrollViewProxy,profile:DockProfile,viewport:CGFloat) -> some View {
         let ids = profile.items.map(\.id) + runningExtras.map(\.id)
         func advance() {
-            guard popovers.activeID == nil, !ids.isEmpty else { return }
+            guard popovers.activeID == nil, !DockInteractionState.shared.resizing, !ids.isEmpty else { return }
             let visible = ids.enumerated().compactMap { index,id -> (Int,CGFloat)? in guard let frame = itemFrames[id] else { return nil }; let mid = vertical ? frame.midY:frame.midX; return (index,abs(mid - viewport / 2)) }.min { $0.1 < $1.1 }?.0 ?? 0
             let next = max(0,min(ids.count - 1,visible + direction))
-            withAnimation(reduceMotion ? nil : .easeOut(duration:0.16)) { proxy.scrollTo(ids[next],anchor:.center) }
+            // This control repeats while hovered; keep each step immediate.
+            proxy.scrollTo(ids[next],anchor:.center)
         }
-        return Button(action:advance) { Image(systemName: vertical ? (direction < 0 ? "chevron.up" : "chevron.down") : (direction < 0 ? "chevron.left" : "chevron.right")).font(.system(size:10,weight:.bold)).frame(width:28,height:28).dockGlass(cornerRadius:14) }
-            .buttonStyle(.plain).padding(3).onHover { inside in hoverTimer?.invalidate(); if inside && popovers.activeID == nil { hoverTimer = Timer.scheduledTimer(withTimeInterval:0.25,repeats:true) { _ in Task { @MainActor in advance() } } } }
+        return Button(action:advance) { Image(systemName: vertical ? (direction < 0 ? "chevron.up" : "chevron.down") : (direction < 0 ? "chevron.left" : "chevron.right")).font(.system(size:10,weight:.bold)) }
+            .buttonStyle(DockIconButtonStyle(size:32)).padding(3).onHover { inside in
+                hoverTimer?.invalidate()
+                if inside && popovers.activeID == nil && !DockInteractionState.shared.resizing {
+                    let timer = Timer(timeInterval:0.25,repeats:true) { _ in Task { @MainActor in advance() } }
+                    RunLoop.main.add(timer,forMode:.common); hoverTimer = timer
+                }
+            }
             .onDisappear { hoverTimer?.invalidate() }
     }
     private func itemGeometry(_ id:UUID)->some View { GeometryReader { proxy in Color.clear.preference(key:DockItemFramesKey.self,value:[id:proxy.frame(in:.named("DockScroll"))]) } }
@@ -132,17 +140,24 @@ struct CustomDockView: View {
         guard observedProfileID == profile.id else { observedProfileID = profile.id; displayedItemIDs = ids; return }
         let old = Set(displayedItemIDs); displayedItemIDs = ids
         guard let added = ids.last(where: { !old.contains($0) }) else { return }
+        pendingAddedItemID = added
+        revealAddedItemIfReady(proxy:proxy)
+    }
+    private func revealAddedItemIfReady(proxy:ScrollViewProxy) {
+        guard let added = pendingAddedItemID, itemFrames[added] != nil else { return }
+        pendingAddedItemID = nil
+        guard !DockInteractionState.shared.dragging, !DockInteractionState.shared.resizing else { return }
         feedbackTask?.cancel()
+        // Geometry confirms the new tile exists; no artificial input-path delay.
+        withAnimation(reduceMotion ? nil : .timingCurve(0.23,1,0.32,1,duration:0.2)) { proxy.scrollTo(added,anchor:.center) }
+        highlightedItemID = added
         feedbackTask = Task { @MainActor in
-            // Wait for the new tile's layout before asking ScrollViewReader to reveal it.
-            try? await Task.sleep(nanoseconds:120_000_000)
-            guard !Task.isCancelled, store.archive.activeCustomID == profile.id else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration:0.22)) { proxy.scrollTo(added,anchor:.center); highlightedItemID = added }
             try? await Task.sleep(nanoseconds:1_500_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration:0.2)) { highlightedItemID = nil }
+            withAnimation(.timingCurve(0.23,1,0.32,1,duration:0.16)) { highlightedItemID = nil }
         }
     }
+    private func cancelAutomaticFeedback() { hoverTimer?.invalidate(); hoverTimer = nil; feedbackTask?.cancel(); feedbackTask = nil; pendingAddedItemID = nil; highlightedItemID = nil }
     private func receiveExternal(_ providers:[NSItemProvider]) -> Bool {
         guard let profileID = store.activeCustom?.id else { return false }
         for provider in providers {
@@ -161,6 +176,18 @@ struct CustomDockView: View {
         }
         return !providers.isEmpty
     }
+}
+/// A cancelled gesture and a completed gesture both discard the grab origin.
+struct DockResizeGestureState {
+    private(set) var startSize:Double?
+    mutating func size(currentSize:Double,translation:CGSize,vertical:Bool)->Double {
+        if startSize == nil { startSize = currentSize.isFinite ? min(80,max(24,currentSize)) : 44 }
+        let start = startSize ?? 44
+        let delta = -(vertical ? Double(translation.width) : Double(translation.height))
+        guard delta.isFinite else { return start }
+        return min(80,max(24,start + delta / 3))
+    }
+    mutating func end() { startSize = nil }
 }
 private struct DockLengthKey: PreferenceKey { static var defaultValue:CGFloat = 0; static func reduce(value:inout CGFloat,nextValue:()->CGFloat) { value = max(value,nextValue()) } }
 private struct DockDropDelegate:DropDelegate {
@@ -201,6 +228,7 @@ struct DockLauncher: View {
     @EnvironmentObject var store:AppStore
     @ObservedObject private var windows = WindowMonitor.shared
     @ObservedObject private var coordinator = WidgetPopoverCoordinator.shared
+    @ObservedObject private var interaction = DockInteractionState.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item:DockItem; let profileID:UUID; var pinned = true
     @State private var hovered = false
@@ -217,7 +245,7 @@ struct DockLauncher: View {
             VStack(spacing:3) {
                 ZStack(alignment:.topTrailing) {
                     Group { if let thumbnail { Image(nsImage:thumbnail).resizable().scaledToFit().frame(width:store.settings.iconSize,height:store.settings.iconSize).clipShape(RoundedRectangle(cornerRadius:6)) } else { AppIconView(item:item,size:store.settings.iconSize) } }
-                        .scaleEffect(hovered && coordinator.activeID == nil && store.settings.magnification && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 1.14 : 1)
+                        .scaleEffect(hovered && coordinator.activeID == nil && store.settings.magnification && !reduceMotion && !interaction.dragging && !interaction.resizing ? 1.14 : 1)
                     if store.settings.showBadges, let badge = windows.badges[URL(fileURLWithPath:item.target).standardizedFileURL.path] { Text(badge).font(.system(size:9,weight:.bold)).foregroundStyle(.white).padding(3).background(.red,in:Capsule()).offset(x:4,y:-3) }
                 }
                 if item.configuration["showName"] == "true" { Text(item.title).font(.system(size:9)).lineLimit(1).frame(maxWidth:80) }
@@ -225,7 +253,7 @@ struct DockLauncher: View {
             }.padding(3)
         }.buttonStyle(.plain).help(item.title)
         .onHover { inside in
-            withAnimation(reduceMotion ? nil : .easeOut(duration:0.12)) { hovered = inside }
+            hovered = inside
             hold?.cancel()
             if inside && item.kind == .folder && coordinator.activeID == nil && !DockInteractionState.shared.dragging && !DockInteractionState.shared.resizing {
                 hold = Task { try? await Task.sleep(nanoseconds:700_000_000); guard !Task.isCancelled, hovered, coordinator.activeID == nil, !DockInteractionState.shared.dragging, !DockInteractionState.shared.resizing else { return }; loadContents(); browse = true }
@@ -239,7 +267,7 @@ struct DockLauncher: View {
                         AppIconView(item:item,size:24)
                         Text(item.title).font(.headline).lineLimit(2)
                         Spacer()
-                        Button { browse = false } label: { Image(systemName:"xmark").font(.system(size:11,weight:.semibold)).frame(width:32,height:32) }.buttonStyle(.plain).dockGlass(cornerRadius:16).help("关闭").accessibilityLabel("关闭内容浏览")
+                        Button { browse = false } label: { Image(systemName:"xmark").font(.system(size:11,weight:.semibold)) }.buttonStyle(DockIconButtonStyle()).help("关闭").accessibilityLabel("关闭内容浏览")
                     }
                     if contents.isEmpty { Text("这里暂时没有可显示的项目。").foregroundStyle(.secondary) }
                     ForEach(contents) { child in
@@ -261,6 +289,8 @@ struct DockLauncher: View {
         }
         .onChange(of:browse) { open in if open { coordinator.activeID = item.id } else if coordinator.activeID == item.id { coordinator.activeID = nil } }
         .onChange(of:coordinator.activeID) { active in if active != item.id { browse = false } }
+        .onChange(of:interaction.dragging) { if $0 { hold?.cancel() } }
+        .onChange(of:interaction.resizing) { if $0 { hold?.cancel() } }
         .onChange(of:item.configuration) { _ in if browse { loadContents() } }
         .onChange(of:item.target) { _ in if browse { loadContents() } }
         .onDisappear { hold?.cancel(); if coordinator.activeID == item.id { coordinator.activeID = nil } }
@@ -307,13 +337,13 @@ private struct MinimizedWindowTile:View {
         }.buttonStyle(.plain).help(window.title)
         .onHover { inside in
             hoverTask?.cancel()
-            if inside, !preview, coordinator.activeID == nil {
-                hoverTask = Task { try? await Task.sleep(nanoseconds:350_000_000); guard !Task.isCancelled, coordinator.activeID == nil, !DockInteractionState.shared.dragging else { return }; preview = true }
+            if inside, !preview, coordinator.activeID == nil, !DockInteractionState.shared.resizing, !DockInteractionState.shared.dragging {
+                hoverTask = Task { try? await Task.sleep(nanoseconds:350_000_000); guard !Task.isCancelled, coordinator.activeID == nil, !DockInteractionState.shared.dragging, !DockInteractionState.shared.resizing else { return }; preview = true }
             }
         }
         .popover(isPresented:$preview,arrowEdge:position.popoverEdge) {
             VStack(spacing:12) {
-                HStack { Text(window.title).font(.headline).lineLimit(2); Spacer(); Button { preview = false } label: { Image(systemName:"xmark").frame(width:32,height:32) }.buttonStyle(.plain).dockGlass(cornerRadius:16).help("关闭") }
+                HStack { Text(window.title).font(.headline).lineLimit(2); Spacer(); Button { preview = false } label: { Image(systemName:"xmark") }.buttonStyle(DockIconButtonStyle()).help("关闭") }
                 if let image = window.image { Image(nsImage:image).resizable().scaledToFit().frame(maxWidth:320,maxHeight:220) }
                 Button("恢复窗口",action:restore)
             }.padding(16).frame(maxWidth:350).dockCard(cornerRadius:20).onExitCommand { preview = false }

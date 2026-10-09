@@ -7,6 +7,27 @@ final class DockPanel:NSPanel {
     override var canBecomeMain:Bool { false }
 }
 
+/// A trackpad movement chooses at most one layout. Inertia is scrolling, not
+/// another layout-selection gesture; unphased devices reset after an idle gap.
+struct DockLayoutScrollGesture {
+    private var accumulated:CGFloat = 0
+    private var triggered = false
+    private var lastUnphasedTime:TimeInterval?
+    mutating func reset() { accumulated = 0; triggered = false; lastUnphasedTime = nil }
+    mutating func direction(delta:CGFloat,threshold:CGFloat,momentum:Bool,unphased:Bool,timestamp:TimeInterval)->Int? {
+        guard !momentum, delta.isFinite, threshold.isFinite, threshold > 0 else { return nil }
+        if unphased {
+            if let last = lastUnphasedTime, timestamp - last > 0.2 { reset() }
+            lastUnphasedTime = timestamp
+        }
+        guard !triggered else { return nil }
+        accumulated += delta
+        guard abs(accumulated) >= threshold else { return nil }
+        triggered = true
+        return accumulated > 0 ? -1:1
+    }
+}
+
 @MainActor
 final class DockPanelController {
     private let store:AppStore
@@ -19,8 +40,7 @@ final class DockPanelController {
     private var pointerAwaySince:Date?
     private var edgeEnteredAt:Date?
     private var revealedUntil = Date.distantPast
-    private var lastCycle = Date.distantPast
-    private var gestureDelta:CGFloat = 0
+    private var layoutGesture = DockLayoutScrollGesture()
     private var pointerInteraction = false
     private var visibilityTimerInterval:TimeInterval?
     private var displayedProfileID:UUID?
@@ -48,15 +68,20 @@ final class DockPanelController {
             // Popover scroll views must receive their own events; only Dock layout
             // switching is suspended while a popover or resize is in progress.
             guard WidgetPopoverCoordinator.shared.activeID == nil,!DockInteractionState.shared.resizing,!DockInteractionState.shared.dragging else { return event }
+            if event.phase.contains(.began) || event.phase.contains(.mayBegin) { self.layoutGesture.reset() }
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) { self.layoutGesture.reset(); return event }
             let vertical = self.store.settings.position != .bottom
             let cross = vertical ? event.scrollingDeltaX : event.scrollingDeltaY
             let along = vertical ? event.scrollingDeltaY : event.scrollingDeltaX
-            if event.modifierFlags.contains(.command),abs(event.scrollingDeltaY) > 3 { self.cycle(event.scrollingDeltaY > 0 ? -1:1); return nil }
+            if event.modifierFlags.contains(.command),abs(event.scrollingDeltaY) > 3 {
+                if event.hasPreciseScrollingDeltas {
+                    if let direction = self.layoutGesture.direction(delta:event.scrollingDeltaY,threshold:3,momentum:!event.momentumPhase.isEmpty,unphased:event.phase.isEmpty,timestamp:event.timestamp) { self.cycle(direction) }
+                } else if event.momentumPhase.isEmpty { self.cycle(event.scrollingDeltaY > 0 ? -1:1) }
+                return nil
+            }
             if event.type == .swipe { let delta = vertical ? event.deltaX : event.deltaY; if abs(delta) > 0 { self.cycle(delta > 0 ? -1:1); return nil }; return event }
             if event.hasPreciseScrollingDeltas,abs(cross) > abs(along) * 1.2 {
-                if event.phase == .began { self.gestureDelta = 0 }
-                self.gestureDelta += cross
-                if abs(self.gestureDelta) > 36 { self.cycle(self.gestureDelta > 0 ? -1:1); self.gestureDelta = 0 }
+                if let direction = self.layoutGesture.direction(delta:cross,threshold:36,momentum:!event.momentumPhase.isEmpty,unphased:event.phase.isEmpty,timestamp:event.timestamp) { self.cycle(direction) }
                 return nil
             }
             if !DockInteractionState.shared.contentOverflows,abs(along) >= abs(cross) { return nil }
@@ -66,7 +91,7 @@ final class DockPanelController {
     }
     deinit { timer?.invalidate(); if let inputMonitor { NSEvent.removeMonitor(inputMonitor) } }
     func prepareForTermination() { timer?.invalidate(); WidgetPopoverCoordinator.shared.activeID = nil; panel?.orderOut(nil); handle?.orderOut(nil); windowSpace.restore() }
-    private func cycle(_ direction:Int) { guard Date().timeIntervalSince(lastCycle) > 0.55 else { return }; lastCycle = Date(); store.cycleCustom(direction:direction) }
+    private func cycle(_ direction:Int) { store.cycleCustom(direction:direction) }
     private func update() {
         guard store.settings.mode != .nativeOnly,store.settings.showCustomDock,let profile = store.activeCustom else { WidgetPopoverCoordinator.shared.activeID = nil; panel?.orderOut(nil); handle?.orderOut(nil); timer?.invalidate(); timer = nil; visibilityTimerInterval = nil; pointerInteraction = false; edgeEnteredAt = nil; pointerAwaySince = nil; DockInteractionState.shared.endIfMouseReleased(); windowSpace.restore(); return }
         let currentIDs = Set(profile.items.map(\.id))
@@ -132,12 +157,13 @@ final class DockPanelController {
         let screen = NSScreen.screens[max(0,min(store.settings.displayIndex,NSScreen.screens.count - 1))]
         let mouseDown = NSEvent.pressedMouseButtons & 1 != 0
         if !mouseDown { pointerInteraction = false }
-        if DesktopVisibility.missionControlVisible() || (store.settings.mode == .both && store.settings.hideWhenNativeDockShows && DesktopVisibility.nativeDockVisible()) { WidgetPopoverCoordinator.shared.activeID = nil; panel.orderOut(nil); handle?.orderOut(nil); edgeEnteredAt = nil; windowSpace.restore(); return }
+        let hasPopover = WidgetPopoverCoordinator.shared.activeID != nil || !(panel.childWindows ?? []).filter(\.isVisible).isEmpty
+        let interacting = hasPopover || (mouseDown && (pointerInteraction || DockInteractionState.shared.dragging || DockInteractionState.shared.resizing))
+        if DesktopVisibility.missionControlVisible() || (!interacting && store.settings.mode == .both && store.settings.hideWhenNativeDockShows && DesktopVisibility.nativeDockVisible()) { WidgetPopoverCoordinator.shared.activeID = nil; panel.orderOut(nil); handle?.orderOut(nil); edgeEnteredAt = nil; windowSpace.restore(); return }
         if store.settings.autoHide {
             let pointer = NSEvent.mouseLocation,f = screen.frame
             let atEdge:Bool
             switch store.settings.position { case .left:atEdge = pointer.x <= f.minX + 5 && f.contains(pointer);case .right:atEdge = pointer.x >= f.maxX - 5 && f.contains(pointer);case .bottom:atEdge = pointer.y <= f.minY + 5 && f.contains(pointer) }
-            let hasPopover = WidgetPopoverCoordinator.shared.activeID != nil || !(panel.childWindows ?? []).filter(\.isVisible).isEmpty
             if atEdge {
                 if edgeEnteredAt == nil { edgeEnteredAt = Date() }
                 if Date().timeIntervalSince(edgeEnteredAt!) >= 0.2 { reveal() }

@@ -81,15 +81,15 @@ struct ManagerView: View {
                 BrandMark(size: 34)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenDock").font(.system(size: 17, weight: .semibold))
-                    Text("让桌面，跟随你。 ").font(.system(size: 10)).foregroundStyle(DockTheme.secondary)
+                    Text("让桌面，跟随你。 ").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
                 }
             }.padding(.top, 48).padding(.bottom, 30).padding(.horizontal, 22)
             Button { page = "docks" } label: {
                 HStack { Image(systemName: "square.grid.2x2"); Text("我的 Dock"); Spacer(); Text("\(store.profiles.count)").font(.caption).foregroundStyle(DockTheme.secondary) }
-                    .padding(13).background(page == "docks" ? DockTheme.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 13))
-            }.buttonStyle(.plain).padding(.horizontal, 14)
-            HStack { Text("保存的布局").font(.system(size: 10, weight: .medium)).foregroundStyle(DockTheme.secondary); Spacer()
-                Menu { Button("自定义 Dock") { store.createProfile(kind: .custom); page = "docks" }; Button("保存当前 macOS Dock") { store.captureNative(); page = "docks" }; Button("空白 macOS 布局") { store.createProfile(kind: .native); page = "docks" } } label: { Image(systemName: "plus").font(.system(size: 12)) }.menuStyle(.borderlessButton).frame(width: 20)
+                    .padding(13)
+            }.buttonStyle(DockSelectableCardStyle(selected: page == "docks", cornerRadius: 13, showsSelectionBorder: false)).padding(.horizontal, 14)
+            HStack { Text("保存的布局").font(.system(size: 11, weight: .medium)).foregroundStyle(DockTheme.secondary); Spacer()
+                Menu { Button("自定义 Dock") { store.createProfile(kind: .custom); page = "docks" }; Button("保存当前 macOS Dock") { store.captureNative(); page = "docks" }; Button("空白 macOS 布局") { store.createProfile(kind: .native); page = "docks" } } label: { Image(systemName: "plus").font(.system(size: 12)).frame(width: 32, height: 32) }.menuStyle(.borderlessButton).frame(width: 32).help("新建或保存布局").accessibilityLabel("新建或保存布局")
             }.padding(.horizontal, 26).padding(.top, 30).padding(.bottom, 10)
             ScrollView {
                 VStack(spacing: 5) {
@@ -97,13 +97,15 @@ struct ManagerView: View {
                         Button { store.selectedID = profile.id; page = "docks" } label: {
                             HStack(spacing: 11) {
                                 Circle().fill(Color(hex: profile.color)).frame(width: 8, height: 8)
-                                VStack(alignment: .leading, spacing: 4) { Text(profile.name).font(.system(size: 13, weight: .medium)).lineLimit(1); Text(profile.kind.title).font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
+                                VStack(alignment: .leading, spacing: 4) { Text(profile.name).font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle); Text(profile.kind.title).font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
                                 Spacer()
                                 if store.archive.activeCustomID == profile.id || store.archive.activeNativeID == profile.id { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(DockTheme.accent) }
                             }.padding(.horizontal, 13).padding(.vertical, 13).background {
                                 if store.selectedID == profile.id && page == "docks" { DockCardSurface(cornerRadius: 13) }
                             }
-                        }.buttonStyle(.plain).contextMenu {
+                        }.buttonStyle(DockSelectableCardStyle(selected: store.selectedID == profile.id && page == "docks", cornerRadius: 13))
+                            .help(profile.name).accessibilityLabel(profile.name + "，" + profile.kind.title)
+                            .accessibilityAddTraits(store.selectedID == profile.id && page == "docks" ? .isSelected : []).contextMenu {
                             Button("复制布局") { store.duplicate(profile) }
                             Button("删除布局", role: .destructive) { confirmDelete = profile }.disabled(store.profiles.count <= 1)
                         }
@@ -115,12 +117,14 @@ struct ManagerView: View {
                 sidebarButton("外观与设置", symbol: "slider.horizontal.3", target: "settings")
                 sidebarButton("关于 OpenDock", symbol: "info.circle", target: "about")
             }.padding(.horizontal, 14)
-            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.0").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
+            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.1").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
         }.frame(maxHeight: .infinity).dockGlass(cornerRadius: 22)
     }
 
     private func sidebarButton(_ title: String, symbol: String, target: String) -> some View {
-        Button { page = target } label: { HStack(spacing: 11) { Image(systemName: symbol).frame(width: 16); Text(title); Spacer() }.font(.system(size: 13)).padding(13).background(page == target ? DockTheme.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 13)) }.buttonStyle(.plain)
+        Button { page = target } label: { HStack(spacing: 11) { Image(systemName: symbol).frame(width: 16); Text(title); Spacer() }.font(.system(size: 13)).padding(13) }
+            .buttonStyle(DockSelectableCardStyle(selected: page == target, cornerRadius: 13, showsSelectionBorder: false))
+            .accessibilityAddTraits(page == target ? .isSelected : [])
     }
     private var header: some View {
         HStack {
@@ -143,6 +147,7 @@ struct ManagerView: View {
                         Text(profile.kind.title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(DockTheme.accent)
                         TextField("布局名称", text: $nameDraft)
                             .textFieldStyle(.plain).font(.system(size: 29, weight: .semibold)).frame(maxWidth: 420)
+                            .accessibilityLabel("布局名称").help(profile.name)
                             .focused($nameFocused).onSubmit { commitProfileName(); nameFocused = false }
                             .onExitCommand { nameDraft = profile.name; nameFocused = false }
                         Text(profile.kind == .custom ? "常用的应用和小组件，在需要的时候刚好在场。" : "保存你的系统 Dock，随时切换到另一种工作状态。")
@@ -158,35 +163,22 @@ struct ManagerView: View {
 
                 preview(profile)
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) { Text("布局中的项目").font(.system(size: 15, weight: .semibold)); Text("⌘ 点击多选 · ⇧ 点击范围选择 · 拖拽所选项目整体排序").font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
-                    Spacer()
-                    if !selectedItems.isEmpty {
-                        Text("已选 \(selectedItems.count)").font(.caption).foregroundStyle(DockTheme.secondary)
-                        if selectedItems.count == 1, let item = profile.items.first(where: { selectedItems.contains($0.id) }), item.kind != .spacer {
-                            Button { edit(item, profile: profile) } label: { Label("编辑", systemImage: "pencil") }.buttonStyle(QuietButtonStyle())
-                        }
-                        Button("复制") { duplicateSelection(in: profile) }.buttonStyle(QuietButtonStyle())
-                        Button("移除") { store.removeItems(selectedItems, from: profile.id); selectedItems = []; selectionAnchor = nil }.buttonStyle(QuietButtonStyle())
-                        Button { selectedItems = []; selectionAnchor = nil } label: { Image(systemName: "xmark.circle") }.buttonStyle(.plain).help("取消选择")
-                    }
-                    addMenu(profile).buttonStyle(QuietButtonStyle())
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 16) { itemSectionHeading.fixedSize(); Spacer(minLength: 8); selectionActions(profile).fixedSize() }
+                    VStack(alignment: .leading, spacing: 12) { itemSectionHeading; selectionActions(profile) }
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
                     ForEach(profile.items) { item in itemCard(item, profile: profile) }
                     Button {
                         if profile.kind == .custom { store.widgetLibraryPresented = true } else { store.addItems(AppService.chooseItems(kind: .app)) }
                     } label: {
-                        VStack(spacing: 10) { Image(systemName: "plus").font(.system(size: 21, weight: .light)); Text(profile.kind == .custom ? "添加组件" : "添加应用").font(.system(size: 11)) }.frame(maxWidth: .infinity).frame(height: 120).foregroundStyle(DockTheme.secondary).background(RoundedRectangle(cornerRadius: 13).stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(Color(hex: "D6D5E4")))
-                    }.buttonStyle(.plain)
+                        VStack(spacing: 10) { Image(systemName: "plus").font(.system(size: 21, weight: .light)); Text(profile.kind == .custom ? "添加组件" : "添加应用").font(.system(size: 12)) }.frame(maxWidth: .infinity).frame(height: 124).foregroundStyle(DockTheme.secondary).background(RoundedRectangle(cornerRadius: 18).stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(DockTheme.line))
+                    }.buttonStyle(DockSelectableCardStyle(cornerRadius: 18))
                         .onDrop(of: DockDragPayload.acceptedTypes, delegate: ItemReorderDelegate(itemID: nil, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
                 }
-                HStack(spacing: 10) {
-                    Image(systemName: "keyboard").foregroundStyle(DockTheme.accent)
-                    ShortcutRecorder(profileID: profile.id)
-                    Text("通过菜单栏或快捷键切换布局").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
-                    Spacer()
-                    profileColors(profile)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) { shortcutControls(profile).fixedSize(); Spacer(minLength: 8); profileColors(profile).fixedSize() }
+                    VStack(alignment: .leading, spacing: 14) { shortcutControls(profile); profileColors(profile) }
                 }.padding(16).dockCard(cornerRadius: 16)
                 if let notice = store.notice { Label(notice, systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Color(hex: "4B9B7E")) }
             }.padding(.horizontal, 30).padding(.top, 8).padding(.bottom, 30)
@@ -212,7 +204,7 @@ struct ManagerView: View {
                 }.padding(12)
             }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: 640).dockGlass(cornerRadius: 23); Spacer() }
             Spacer(minLength: 18)
-            HStack { Spacer(); Text(profile.name).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.7)); Spacer() }.padding(.bottom, 20)
+            HStack { Spacer(); Text(profile.name).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.85)).lineLimit(1).truncationMode(.middle).help(profile.name); Spacer() }.padding(.horizontal, 24).padding(.bottom, 20)
         }
         .frame(height: 216)
         .background {
@@ -230,29 +222,60 @@ struct ManagerView: View {
             if let widget = item.widget { Image(systemName: widget.symbol).font(.system(size: 25, weight: .light)).foregroundStyle(DockTheme.accent).frame(height: 44) }
             else if item.kind == .spacer { Image(systemName: "rectangle.split.2x1").font(.system(size: 22, weight: .light)).foregroundStyle(DockTheme.secondary).frame(height: 44) }
             else { AppIconView(item: item, size: 44) }
-            Text(itemTitle(item)).font(.system(size: 12, weight: .medium)).lineLimit(1)
-            Text(item.widget?.category ?? (item.kind == .app ? "应用" : item.kind == .appGroup ? "应用分组" : item.kind == .folder ? "文件夹" : item.kind == .link ? "链接" : item.kind == .spacer ? "留白" : "文件")).font(.system(size: 10)).foregroundStyle(DockTheme.secondary)
-        }.frame(maxWidth: .infinity).frame(height: 124).dockCard(cornerRadius: 18)
-            .overlay(RoundedRectangle(cornerRadius: 18).fill(selectedItems.contains(item.id) ? DockTheme.accent.opacity(0.07) : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(selectedItems.contains(item.id) ? DockTheme.accent : .clear, lineWidth: 1.5))
+            Text(itemTitle(item)).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
+            Text(item.widget?.category ?? (item.kind == .app ? "应用" : item.kind == .appGroup ? "应用分组" : item.kind == .folder ? "文件夹" : item.kind == .link ? "链接" : item.kind == .spacer ? "留白" : "文件")).font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
+        }.padding(.horizontal, 12).frame(maxWidth: .infinity).frame(height: 124).dockCard(cornerRadius: 18)
             .overlay(alignment: .topTrailing) { if selectedItems.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(DockTheme.accent).padding(9) } }
-        }.buttonStyle(.plain)
+        }.buttonStyle(DockSelectableCardStyle(selected: selectedItems.contains(item.id), cornerRadius: 18))
+            .help(itemTitle(item))
             .contentShape(RoundedRectangle(cornerRadius: 18))
             .simultaneousGesture(TapGesture(count: 2).onEnded { if item.kind != .spacer { edit(item, profile: profile) } })
             .accessibilityLabel(itemTitle(item))
-            .accessibilityHint("选中后可编辑、复制或移除；支持 Command 和 Shift 多选。")
+            .accessibilityHint(item.kind == .spacer ? "选中后可复制或移除；支持 Command 和 Shift 多选。" : "选中后可编辑、复制或移除；支持 Command 和 Shift 多选。")
             .accessibilityAddTraits(selectedItems.contains(item.id) ? .isSelected : [])
+            .accessibilityActions {
+                if item.kind != .spacer { Button("编辑项目") { edit(item, profile: profile) } }
+            }
             .onDrag { beginDrag(item.id); return dragProvider(in: profile) }
             .onDrop(of: DockDragPayload.acceptedTypes, delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
             .contextMenu {
                 if item.kind != .spacer && item.kind != .widget { Button("打开") { AppService.open(item) } }
                 if item.kind != .spacer { Button("编辑名称与图标…") { edit(item, profile: profile) } }
                 Button(actionIDs(item).count > 1 ? "复制所选项目" : "复制") { duplicateSelection(in: profile, fallback: item) }
-                Button("向前移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i > 0 { p.items.swapAt(i, i - 1) } } }
-                Button("向后移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i + 1 < p.items.count { p.items.swapAt(i, i + 1) } } }
+                Button("向前移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i > 0 { p.items.swapAt(i, i - 1) } } }.disabled(profile.items.first?.id == item.id)
+                Button("向后移动") { store.updateProfile(profile.id) { p in if let i = p.items.firstIndex(where: { $0.id == item.id }), i + 1 < p.items.count { p.items.swapAt(i, i + 1) } } }.disabled(profile.items.last?.id == item.id)
                 Divider()
                 Button(actionIDs(item).count > 1 ? "移除所选项目" : "移除", role: .destructive) { let ids = actionIDs(item); store.removeItems(ids, from: profile.id); selectedItems.subtract(ids) }
             }
+    }
+
+    private var itemSectionHeading: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("布局中的项目").font(.system(size: 15, weight: .semibold))
+            Text("⌘ 点击多选 · ⇧ 点击范围选择 · 拖拽整体排序").font(.system(size: 12)).foregroundStyle(DockTheme.secondary)
+        }
+    }
+    private func selectionActions(_ profile: DockProfile) -> some View {
+        HStack(spacing: 8) {
+            if !selectedItems.isEmpty {
+                Text("已选 \(selectedItems.count)").font(.caption).monospacedDigit().foregroundStyle(DockTheme.secondary)
+                if selectedItems.count == 1, let item = profile.items.first(where: { selectedItems.contains($0.id) }), item.kind != .spacer {
+                    Button { edit(item, profile: profile) } label: { Label("编辑", systemImage: "pencil") }.buttonStyle(QuietButtonStyle())
+                }
+                Button("复制") { duplicateSelection(in: profile) }.buttonStyle(QuietButtonStyle())
+                Button("移除") { store.removeItems(selectedItems, from: profile.id); selectedItems = []; selectionAnchor = nil }.buttonStyle(QuietButtonStyle())
+                Button { selectedItems = []; selectionAnchor = nil } label: { Image(systemName: "xmark") }
+                    .buttonStyle(DockIconButtonStyle()).help("取消选择").accessibilityLabel("取消选择")
+            }
+            addMenu(profile).buttonStyle(QuietButtonStyle())
+        }
+    }
+    private func shortcutControls(_ profile: DockProfile) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "keyboard").foregroundStyle(DockTheme.accent).accessibilityHidden(true)
+            ShortcutRecorder(profileID: profile.id)
+            Text("通过菜单栏或快捷键切换").font(.system(size: 12)).foregroundStyle(DockTheme.secondary)
+        }
     }
 
     private func itemTitle(_ item: DockItem) -> String { item.title.isEmpty ? item.widget?.title ?? (item.kind == .spacer ? "分隔符" : "未命名项目") : item.title }
@@ -363,7 +386,7 @@ struct ManagerView: View {
             Text("OpenDock").font(.system(size: 32, weight: .semibold))
             Text("你的桌面，由你安排。").font(.system(size: 14)).foregroundStyle(DockTheme.secondary)
             Text("原生 macOS · 开源 · 无账号 · 无遥测").font(.system(size: 11)).foregroundStyle(DockTheme.accent)
-            Text("v" + (Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.0") + " Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
+            Text("v" + (Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.1") + " Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
             Link("查看源代码 ↗", destination: URL(string: "https://github.com/myh66/opendock")!).padding(.top, 10)
             Button("重新查看使用引导") { store.tourPresented = true }.buttonStyle(DockGlassButtonStyle())
             Text("基于 Dockset 公开功能说明独立实现。\nOpenDock 与 Dockset 及其开发者无关联。")

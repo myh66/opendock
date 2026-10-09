@@ -24,8 +24,8 @@ struct WidgetPopoverIconButton: View {
     var prominent = false
     let action: () -> Void
     var body: some View {
-        Button(action: action) { Image(systemName: symbol).frame(width: 16, height: 16) }
-            .buttonStyle(DockGlassButtonStyle(prominent: prominent))
+        Button(action: action) { Image(systemName: symbol).frame(width: 16, height: 16).accessibilityHidden(true) }
+            .buttonStyle(DockIconButtonStyle(prominent: prominent))
             .help(label).accessibilityLabel(label)
     }
 }
@@ -44,14 +44,21 @@ struct WidgetPopoverHeader<Actions: View>: View {
     }
     var body: some View {
         DockGlassGroup(spacing: 8) {
-            HStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                WidgetPopoverIconButton(symbol: "xmark", label: "关闭", action: onClose)
+                    .keyboardShortcut(.cancelAction)
                 Image(systemName: symbol).font(.system(size: 17, weight: .medium)).foregroundStyle(tint)
-                    .frame(width: 34, height: 34).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.headline).lineLimit(1)
-                    if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 6) { actions; WidgetPopoverIconButton(symbol: "xmark", label: "关闭", action: onClose).keyboardShortcut(.cancelAction) }
+                    .frame(width: 28, height: 32).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.system(size: 14, weight: .semibold)).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true).help(title).accessibilityAddTraits(.isHeader)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true).help(subtitle)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 2)
+                    .accessibilityElement(children: .combine)
+                HStack(spacing: 4) { actions }.fixedSize(horizontal: true, vertical: false)
             }.padding(11).dockGlass(cornerRadius: 18)
         }
     }

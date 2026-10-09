@@ -62,19 +62,25 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("让桌面按你的习惯工作。")
                 .font(.system(size: 26, weight: .semibold, design: .rounded))
+                .fixedSize(horizontal: false, vertical: true)
             Text("布局、外观与日常操作，都在这里调整。")
-                .font(.system(size: 13)).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                statusBadge(modeTitle(store.settings.mode), symbol: "dock.rectangle", color: DockTheme.accent)
-                if customVisible { statusBadge(store.settings.position.title, symbol: "display", color: .secondary) }
-                if store.applyingNative { statusBadge("正在切换系统 Dock", symbol: "arrow.triangle.2.circlepath", color: DockTheme.accent) }
+                .font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { headerStatus }
+                VStack(alignment: .leading, spacing: 8) { headerStatus }
             }
         }.padding(.bottom, 2)
     }
 
+    @ViewBuilder private var headerStatus: some View {
+        statusBadge(modeTitle(store.settings.mode), symbol: "dock.rectangle", color: DockTheme.accent)
+        if customVisible { statusBadge(store.settings.position.title, symbol: "display", color: .secondary) }
+        if store.applyingNative { statusBadge("正在切换系统 Dock", symbol: "arrow.triangle.2.circlepath", color: DockTheme.accent) }
+    }
+
     private var setupSection: some View {
         section("Dock 使用方式", symbol: "dock.rectangle", detail: "原生布局和自定义布局分别保存。") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
                 ForEach(DockMode.allCases) { mode in
                     optionCard(modeTitle(mode), detail: modeDetail(mode), selected: store.settings.mode == mode) {
                         SettingsModePreview(mode: mode)
@@ -91,8 +97,9 @@ struct SettingsView: View {
                     else { store.archive.activeNativeID = nil }
                 })) {
                     Text("保留当前系统布局").tag(Optional<UUID>.none)
-                    ForEach(nativeProfiles) { Text($0.name).tag(Optional($0.id)) }
+                    ForEach(nativeProfiles) { Text($0.name).lineLimit(1).truncationMode(.middle).tag(Optional($0.id)) }
                 }.labelsHidden().frame(width: 225).disabled(store.applyingNative)
+                    .help(nativeProfiles.first { $0.id == store.archive.activeNativeID }?.name ?? "保留当前系统布局")
             }
             toggle("显示自定义 Dock", detail: store.settings.mode == .nativeOnly ? "选择「并用」或「自定义为主」后可显示。" : store.settings.mode == .replacement ? "主 Dock 模式保持显示，可以使用下方的自动隐藏。" : "保留布局与设置，随时显示或隐藏。", key: \.showCustomDock, disabled: store.settings.mode == .nativeOnly || (store.settings.mode == .replacement && store.settings.showCustomDock))
             settingRow("自定义布局", detail: customProfiles.isEmpty ? "先在布局页创建一个自定义 Dock。" : "切换布局会显示自定义 Dock。") {
@@ -100,8 +107,9 @@ struct SettingsView: View {
                     if let profile = customProfiles.first(where: { $0.id == id }) { store.activate(profile) }
                 })) {
                     if store.archive.activeCustomID == nil { Text("尚未选择").tag(Optional<UUID>.none) }
-                    ForEach(customProfiles) { Text($0.name).tag(Optional($0.id)) }
+                    ForEach(customProfiles) { Text($0.name).lineLimit(1).truncationMode(.middle).tag(Optional($0.id)) }
                 }.labelsHidden().frame(width: 225).disabled(customProfiles.isEmpty)
+                    .help(store.activeCustom?.name ?? "尚未选择")
             }
             Divider().padding(.vertical, 2)
             toggle("自动保存系统布局变化", detail: store.archive.activeNativeID == nil ? "关联一个 macOS 布局后可用。" : "将手动固定、移除和排序的变化保存到当前 macOS 布局。", key: \.autoSaveNativeChanges, disabled: store.archive.activeNativeID == nil)
@@ -111,7 +119,7 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         section("外观与材质", symbol: "paintpalette", detail: "为 Dock 选一种合适的质感。") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
                 ForEach(DockMaterial.allCases) { material in
                     optionCard(material.title, detail: materialDetail(material), selected: store.settings.material == material) {
                         SettingsMaterialPreview(material: material)
@@ -138,9 +146,10 @@ struct SettingsView: View {
                             Button { store.settings.position = position } label: {
                                 Label(position.title, systemImage: positionSymbol(position)).font(.system(size: 12, weight: .medium))
                                     .padding(.horizontal, 12).padding(.vertical, 9)
-                                    .dockGlass(cornerRadius: 12, tint: store.settings.position == position ? DockTheme.accent.opacity(0.16) : nil, interactive: true)
-                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(store.settings.position == position ? DockTheme.accent.opacity(0.65) : Color.clear))
-                            }.buttonStyle(.plain).accessibilityAddTraits(store.settings.position == position ? .isSelected : [])
+                                    .dockCard(cornerRadius: 12)
+                            }.buttonStyle(DockSelectableCardStyle(selected: store.settings.position == position, cornerRadius: 12))
+                                .accessibilityValue(store.settings.position == position ? "已选择" : "未选择")
+                                .accessibilityAddTraits(store.settings.position == position ? .isSelected : [])
                         }
                     }
                 }
@@ -212,8 +221,8 @@ struct SettingsView: View {
                 let profiles = store.profiles.filter { $0.kind == kind }
                 if !profiles.isEmpty {
                     VStack(alignment: .leading, spacing: 14) {
-                        Label(kind.title, systemImage: kind.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                        ForEach(profiles) { profile in settingRow(profile.name) { ShortcutRecorder(profileID: profile.id) } }
+                        Label(kind.title, systemImage: kind.symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                        ForEach(profiles) { profile in shortcutRow(profile) }
                     }
                     if kind == .custom && !nativeProfiles.isEmpty { Divider().padding(.vertical, 2) }
                 }
@@ -234,15 +243,17 @@ struct SettingsView: View {
             }
             if let profile = store.activeCustom {
                 Divider().padding(.vertical, 2)
-                settingRow("当前布局的链接", detail: "在自动化中打开此链接，切换到「\(profile.name)」。") {
+                settingRow("当前布局的链接", detail: "在自动化中打开此链接，切换当前自定义布局。") {
                     Button(copiedURL ? "已复制" : "复制链接") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString("opendock://profile/\(profile.id.uuidString)", forType: .string)
                         copiedURL = true
                     }.buttonStyle(QuietButtonStyle())
                 }
+                Text(profile.name).font(.system(size: 13, weight: .medium))
+                    .lineLimit(2).truncationMode(.middle).help(profile.name).textSelection(.enabled)
                 Text("opendock://profile/\(profile.id.uuidString)")
-                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
                     .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
             }
         }
@@ -301,7 +312,7 @@ struct SettingsView: View {
         Binding(get: { store.settings[keyPath: key] }, set: { store.settings[keyPath: key] = $0 })
     }
     private func toggle(_ title: String, detail: String? = nil, key: WritableKeyPath<DockSettings, Bool>, disabled: Bool = false) -> some View {
-        settingRow(title, detail: detail, dimmed: disabled) {
+        settingRow(title, detail: detail) {
             Toggle(title, isOn: binding(key)).labelsHidden().toggleStyle(.switch).disabled(disabled)
         }
     }
@@ -317,7 +328,7 @@ struct SettingsView: View {
             content()
         }.padding(22).frame(maxWidth: .infinity, alignment: .leading).dockCard(cornerRadius: 22)
     }
-    private func settingRow<Content: View>(_ title: String, detail: String? = nil, dimmed: Bool = false, @ViewBuilder content: () -> Content) -> some View {
+    private func settingRow<Content: View>(_ title: String, detail: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 22) {
                 rowLabel(title, detail: detail).frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
@@ -327,28 +338,47 @@ struct SettingsView: View {
                 rowLabel(title, detail: detail)
                 content().font(.system(size: 12))
             }.frame(maxWidth: .infinity, alignment: .leading)
-        }.opacity(dimmed ? 0.58 : 1)
+        }
     }
     private func rowLabel(_ title: String, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title).font(.system(size: 13, weight: .medium)).fixedSize(horizontal: false, vertical: true)
-            if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
         }
+    }
+    private func shortcutRow(_ profile: DockProfile) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 22) {
+                shortcutName(profile).frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+                ShortcutRecorder(profileID: profile.id).fixedSize(horizontal: true, vertical: false)
+            }
+            VStack(alignment: .leading, spacing: 11) {
+                shortcutName(profile)
+                ShortcutRecorder(profileID: profile.id)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    private func shortcutName(_ profile: DockProfile) -> some View {
+        Text(profile.name).font(.system(size: 13, weight: .medium))
+            .lineLimit(2).truncationMode(.middle).help(profile.name)
+            .accessibilityLabel(profile.name)
     }
     private func optionCard<Preview: View>(_ title: String, detail: String, selected: Bool, @ViewBuilder preview: () -> Preview, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 10) {
                 preview().frame(height: 65).frame(maxWidth: .infinity)
                 HStack(spacing: 6) {
-                    Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text(title).font(.system(size: 13, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle").foregroundStyle(selected ? DockTheme.accent : Color.secondary.opacity(0.35)).font(.system(size: 14))
                 }
-                Text(detail).font(.system(size: 10)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).lineLimit(2).frame(height: 28, alignment: .top)
-            }.padding(13).frame(maxWidth: .infinity)
-                .dockGlass(cornerRadius: 16, tint: selected ? DockTheme.accent.opacity(0.12) : nil, interactive: true)
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(selected ? DockTheme.accent.opacity(0.65) : Color.secondary.opacity(0.1), lineWidth: selected ? 1.5 : 1))
-        }.buttonStyle(.plain).accessibilityLabel(title).accessibilityValue(selected ? "已选择" : "未选择").accessibilityAddTraits(selected ? .isSelected : [])
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(13).frame(maxWidth: .infinity, minHeight: 158, alignment: .topLeading)
+                .dockCard(cornerRadius: 16)
+        }.buttonStyle(DockSelectableCardStyle(selected: selected))
+            .accessibilityLabel(title).accessibilityValue(selected ? "已选择" : "未选择")
+            .accessibilityHint(detail).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private func permissionCard(_ title: String, symbol: String, allowed: Bool, detail: String, action: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -357,22 +387,23 @@ struct SettingsView: View {
                 Spacer(minLength: 5)
                 Image(systemName: allowed ? "checkmark.circle.fill" : "circle.dashed").foregroundStyle(allowed ? Color.green : Color.secondary)
             }
-            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
-                Text(allowed ? "已允许" : "尚未允许").font(.system(size: 11, weight: .medium)).foregroundStyle(allowed ? Color.green : Color.secondary)
+                Text(allowed ? "已允许" : "尚未允许").font(.system(size: 12, weight: .medium)).foregroundStyle(allowed ? Color.green : Color.secondary)
                 Spacer()
                 Button(allowed ? "查看设置" : "允许…", action: action).buttonStyle(QuietButtonStyle())
             }
         }.padding(15).dockCard(cornerRadius: 16)
     }
     private func statusBadge(_ title: String, symbol: String, color: Color) -> some View {
-        Label(title, systemImage: symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(color)
+        Label(title, systemImage: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(color)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10).padding(.vertical, 6).dockGlass(cornerRadius: 20)
     }
     private func contextualHint(_ text: String, symbol: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: symbol).font(.system(size: 12)).frame(width: 16)
-            Text(text).font(.system(size: 11)).fixedSize(horizontal: false, vertical: true)
+            Text(text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
         }.foregroundStyle(.secondary)
     }
     private func refreshSystemState() {
