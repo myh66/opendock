@@ -23,6 +23,17 @@
 
 本版仍为 **arm64、ad hoc 签名、未公证的开发 Beta**。源码、指定范围界面及纯状态动效审查结论：**Approve**；上述环境验收边界保留。
 
+### 本版 CI 与发布产物
+
+源码提交 `62c193d` 的 [完整 CI](https://github.com/myh66/opendock/actions/runs/37912319114) 全部通过：macOS 15 arm64、Apple Swift 6.1.2，129 项测试 0 失败（8.149 秒），调试／Release 构建、App Intents、ad hoc 签名和 ZIP 上传通过。CI 检查旧工具链的材质回退路径。
+
+[0.3.1 Beta 1](https://github.com/myh66/opendock/releases/tag/v0.3.1-beta.1) 标签指向该源码提交。公开下载回验的 DMG／ZIP 与本机 SHA-256 一致，ZIP 解压后的签名、0.3.1 版本和 beta.1 标签核对通过；DMG 本机校验通过。该发布包来自本机 Swift 6.4，未覆盖安装到个人 Applications。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| OpenDock.dmg | `97a0ded2b3702df55ddfc1fc672a0678b5e538de49c29a96fc532d94c66b55d9` |
+| OpenDock-macOS.zip | `7e8c006b4e50b43405ac2d459e3a4eb4ca710db08b94159be782e521b64bbdec` |
+
 ## 0.3.0 Beta 1 — 2026-10-09
 
 ### 已完成
