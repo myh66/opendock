@@ -12,9 +12,11 @@
 | Release 构建 | 最终源码的 Release 构建通过，arm64、macOS 13 编译目标；原生 Liquid Glass 在 macOS 27 验收，旧工具链路径由 CI 检查。 |
 | App Intents 与签名 | 最终应用包生成布局 Entity/Query、Switch Intent、Focus Filter 与 App Shortcuts 元数据，ad hoc 签名检查通过。尚未配置或执行真实 Focus Filter / Shortcuts 自动化。 |
 | 隔离界面 | 隔离布局下验收管理/设置、浅色与深色组件库和引导；修复玻璃背景把文字一起模糊的问题，实际确认标题与选项清晰。目录 **29 种**；按服务搜索、空结果/清除、添加后关闭选择器、Ollama 文本框中 ⌘W 关闭并保留管理窗、IBKR/Shadowrocket Escape 关闭。 |
+| 启动／退出 | 最终包使用 `--ui-test --smoke-test` 和临时归档启动，报告 2 个布局、29 种组件，正常退出；没有应用个人原生布局。 |
+| Ollama 合成 HTTP | 实际服务读取代码对临时回环 HTTP fixture 的 8 个场景通过：三 GET 完整快照、503、schema 错误、拒绝 302、已声明超限响应、取消、约 5 秒无响应超时、失败后重新读取。24 次 GET 没有认证／Cookie；未访问真实服务，fixture 已停止。未知长度流与持续流资源超时仍待验证。 |
 | 新组件的验证范围 | 网易云组件实际识别本机运行状态，使用合成官方链接验收收藏保存，未执行歌曲播放。Shadowrocket 显示真实客户端进程与系统代理只读摘要，未修改网络。Ollama 合成敏感地址显示“仅内存未保存”，布局 JSON 确认不含合成秘密；未进行真实 Ollama/IBKR 读取。边界见 [连接指南](INTEGRATIONS.md)。 |
 
-上述界面检查使用临时布局，未写入个人配置、未请求新权限。关于页重播引导、选择模式后仍保留原设置、跳过后保留两个布局均已实际确认。最终 ZIP / DMG 创建，DMG 校验通过，附 SHA-256；测试前后系统 Dock 的 39 个固定项目与隐藏/延迟/动画设置一致。
+上述界面检查使用临时布局，未写入个人配置、未请求新权限。关于页重播引导、选择模式后仍保留原设置、跳过后保留两个布局均已实际确认。最终 ZIP / DMG 创建，DMG 校验通过；公开发布下载回验，两份产物与 SHA-256 均匹配，标签指向 `192a18a`；测试前后系统 Dock 的 39 个固定项目与隐藏/延迟/动画设置一致。
 
 ### 待完成与尚未实测
 
@@ -28,7 +30,7 @@
 
 ### 本版持续集成
 
-本版最终提交的 CI 结果待补充，入口为 [GitHub Actions](https://github.com/myh66/opendock/actions)。下列 0.2.0 的成功工作流仅作为历史证据。
+源码提交 `192a18a` 的 [完整 CI](https://github.com/myh66/opendock/actions/runs/37907719662) 已通过：macOS 15 arm64、Apple Swift 6.1.2，122 项测试 0 失败（8.286 秒），调试及 Release 构建、App Intents 元数据、ad hoc 签名和 ZIP 产物上传均通过。该工作流检查旧工具链材质回退；公开安装包来自本机 Swift 6.4 构建，原生玻璃在 macOS 27 实测。
 
 ## 0.2.0 Beta 1 — 2026-10-08（历史证据）
 
