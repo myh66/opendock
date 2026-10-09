@@ -7,7 +7,7 @@ struct ManagerView: View {
     @State private var page = "docks"
     @State private var showingLink = false
     @State private var linkTitle = ""
-    @State private var linkURL = "https://"
+    @State private var linkURL = ""
     @State private var dragging: UUID?
     @State private var confirmDelete: DockProfile?
     @State private var confirmNative: DockProfile?
@@ -16,21 +16,24 @@ struct ManagerView: View {
     @State private var selectionAnchor: UUID?
     @State private var editingItem: DockItem?
     @State private var editingProfileID: UUID?
+    @State private var nameDraft = ""
+    @State private var nameProfileID: UUID?
+    @FocusState private var nameFocused: Bool
+    @ObservedObject private var interactions = DockInteractionState.shared
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar.frame(width: 224)
-            Rectangle().fill(DockTheme.line).frame(width: 1)
+            sidebar.frame(width: 232).padding(10)
             VStack(spacing: 0) {
                 header
                 if page == "settings" { SettingsView().padding(30) }
                 else if page == "about" { about }
                 else if let profile = store.selected { editor(profile) }
                 else { emptyState }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity).background(DockTheme.canvas)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .foregroundStyle(DockTheme.ink)
-        .preferredColorScheme(.light)
+        .background(DockAppBackdrop())
         .frame(minWidth: 940, minHeight: 680)
         .tint(DockTheme.accent)
         .sheet(isPresented: $store.widgetLibraryPresented) { WidgetLibraryView() }
@@ -55,9 +58,17 @@ struct ManagerView: View {
         } message: { Text("将替换系统 Dock 中固定的应用和分隔符，并重新启动 Dock。原布局会自动备份，可在设置中恢复。") }
         .onChange(of: store.settingsPresented) { value in if value { page = "settings"; store.settingsPresented = false } }
         .onChange(of: store.requestedPage) { value in if let value { page = value; store.requestedPage = nil } }
-        .onChange(of: store.selectedID) { _ in page = "docks"; selectedItems = []; selectionAnchor = nil }
-        .onChange(of: page) { value in store.settings.managerPage = value }
+        .onChange(of: store.selectedID) { _ in commitProfileName(); nameFocused = false; loadProfileName(); page = "docks"; selectedItems = []; selectionAnchor = nil }
+        .onChange(of: store.selected?.items.map(\.id)) { ids in
+            selectedItems.formIntersection(Set(ids ?? []))
+            if let anchor = selectionAnchor, !selectedItems.contains(anchor) { selectionAnchor = nil }
+        }
+        .onChange(of: nameFocused) { focused in if !focused { commitProfileName() } }
+        .onChange(of: store.selected?.name) { value in if !nameFocused { nameDraft = value ?? "" } }
+        .onChange(of: interactions.dragging) { active in if !active { dragging = nil } }
+        .onChange(of: page) { value in commitProfileName(); nameFocused = false; store.settings.managerPage = value }
         .onAppear {
+            loadProfileName()
             page = store.settings.managerPage
             if store.settingsPresented { page = "settings"; store.settingsPresented = false }
             if let requested = store.requestedPage { page = requested; store.requestedPage = nil }
@@ -75,7 +86,7 @@ struct ManagerView: View {
             }.padding(.top, 48).padding(.bottom, 30).padding(.horizontal, 22)
             Button { page = "docks" } label: {
                 HStack { Image(systemName: "square.grid.2x2"); Text("我的 Dock"); Spacer(); Text("\(store.profiles.count)").font(.caption).foregroundStyle(DockTheme.secondary) }
-                    .padding(12).background(page == "docks" ? DockTheme.accent.opacity(0.09) : .clear).clipShape(RoundedRectangle(cornerRadius: 9))
+                    .padding(13).background(page == "docks" ? DockTheme.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 13))
             }.buttonStyle(.plain).padding(.horizontal, 14)
             HStack { Text("保存的布局").font(.system(size: 10, weight: .medium)).foregroundStyle(DockTheme.secondary); Spacer()
                 Menu { Button("自定义 Dock") { store.createProfile(kind: .custom); page = "docks" }; Button("保存当前 macOS Dock") { store.captureNative(); page = "docks" }; Button("空白 macOS 布局") { store.createProfile(kind: .native); page = "docks" } } label: { Image(systemName: "plus").font(.system(size: 12)) }.menuStyle(.borderlessButton).frame(width: 20)
@@ -86,10 +97,12 @@ struct ManagerView: View {
                         Button { store.selectedID = profile.id; page = "docks" } label: {
                             HStack(spacing: 11) {
                                 Circle().fill(Color(hex: profile.color)).frame(width: 8, height: 8)
-                                VStack(alignment: .leading, spacing: 4) { Text(profile.name).font(.system(size: 12, weight: .medium)).lineLimit(1); Text(profile.kind.title).font(.system(size: 10)).foregroundStyle(DockTheme.secondary) }
+                                VStack(alignment: .leading, spacing: 4) { Text(profile.name).font(.system(size: 13, weight: .medium)).lineLimit(1); Text(profile.kind.title).font(.system(size: 11)).foregroundStyle(DockTheme.secondary) }
                                 Spacer()
                                 if store.archive.activeCustomID == profile.id || store.archive.activeNativeID == profile.id { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(DockTheme.accent) }
-                            }.padding(.horizontal, 13).padding(.vertical, 12).background(store.selectedID == profile.id && page == "docks" ? Color.white : Color.clear).clipShape(RoundedRectangle(cornerRadius: 9))
+                            }.padding(.horizontal, 13).padding(.vertical, 13).background {
+                                if store.selectedID == profile.id && page == "docks" { DockCardSurface(cornerRadius: 13) }
+                            }
                         }.buttonStyle(.plain).contextMenu {
                             Button("复制布局") { store.duplicate(profile) }
                             Button("删除布局", role: .destructive) { confirmDelete = profile }.disabled(store.profiles.count <= 1)
@@ -102,19 +115,23 @@ struct ManagerView: View {
                 sidebarButton("外观与设置", symbol: "slider.horizontal.3", target: "settings")
                 sidebarButton("关于 OpenDock", symbol: "info.circle", target: "about")
             }.padding(.horizontal, 14)
-            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.2.0").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
-        }.frame(maxHeight: .infinity).background(Color(hex: "F1F1F7"))
+            HStack(spacing: 6) { Circle().fill(Color(hex: "62B393")).frame(width: 5, height: 5); Text("开源 · 本地优先").font(.system(size: 10)); Spacer(); Text(Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.0").font(.system(size: 10)) }.foregroundStyle(DockTheme.secondary).padding(23)
+        }.frame(maxHeight: .infinity).dockGlass(cornerRadius: 22)
     }
 
     private func sidebarButton(_ title: String, symbol: String, target: String) -> some View {
-        Button { page = target } label: { HStack(spacing: 11) { Image(systemName: symbol).frame(width: 16); Text(title); Spacer() }.font(.system(size: 12)).padding(12).background(page == target ? Color.white : Color.clear).clipShape(RoundedRectangle(cornerRadius: 9)) }.buttonStyle(.plain)
+        Button { page = target } label: { HStack(spacing: 11) { Image(systemName: symbol).frame(width: 16); Text(title); Spacer() }.font(.system(size: 13)).padding(13).background(page == target ? DockTheme.accent.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 13)) }.buttonStyle(.plain)
     }
     private var header: some View {
         HStack {
             HStack(spacing: 7) { Text("工作空间").foregroundStyle(DockTheme.secondary); Image(systemName: "chevron.right").font(.system(size: 8)); Text(page == "settings" ? "设置" : page == "about" ? "关于" : "我的 Dock") }.font(.system(size: 11))
             Spacer()
-            Button { store.importArchive() } label: { Label("导入", systemImage: "square.and.arrow.down") }.buttonStyle(.plain)
-            Button { store.exportArchive() } label: { Label("导出", systemImage: "square.and.arrow.up") }.buttonStyle(.plain).padding(.leading, 16)
+            DockGlassGroup {
+                HStack(spacing: 12) {
+                    Button { store.importArchive() } label: { Label("导入", systemImage: "square.and.arrow.down") }
+                    Button { store.exportArchive() } label: { Label("导出", systemImage: "square.and.arrow.up") }
+                }.buttonStyle(DockGlassButtonStyle())
+            }
         }.font(.system(size: 11)).padding(.horizontal, 30).padding(.top, 27).padding(.bottom, 22)
     }
 
@@ -124,8 +141,10 @@ struct ManagerView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(profile.kind.title.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(1.5).foregroundStyle(DockTheme.accent)
-                        TextField("布局名称", text: Binding(get: { store.profiles.first { $0.id == profile.id }?.name ?? "" }, set: { name in if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { store.updateProfile(profile.id) { $0.name = name } } }))
-                            .textFieldStyle(.plain).font(.system(size: 31, weight: .semibold)).frame(maxWidth: 420)
+                        TextField("布局名称", text: $nameDraft)
+                            .textFieldStyle(.plain).font(.system(size: 29, weight: .semibold)).frame(maxWidth: 420)
+                            .focused($nameFocused).onSubmit { commitProfileName(); nameFocused = false }
+                            .onExitCommand { nameDraft = profile.name; nameFocused = false }
                         Text(profile.kind == .custom ? "常用的应用和小组件，在需要的时候刚好在场。" : "保存你的系统 Dock，随时切换到另一种工作状态。")
                             .font(.system(size: 12)).foregroundStyle(DockTheme.secondary)
                     }
@@ -133,8 +152,8 @@ struct ManagerView: View {
                     Button {
                         if profile.kind == .native { confirmNative = profile } else { store.activate(profile) }
                     } label: {
-                        HStack(spacing: 7) { Image(systemName: "checkmark.circle"); Text(store.archive.activeCustomID == profile.id ? "当前布局" : "使用此布局") }.font(.system(size: 12, weight: .medium)).padding(.horizontal, 17).padding(.vertical, 11)
-                    }.buttonStyle(.plain).foregroundStyle(.white).background(DockTheme.accent).clipShape(RoundedRectangle(cornerRadius: 10)).disabled(store.applyingNative)
+                        HStack(spacing: 7) { Image(systemName: isActive(profile) ? "checkmark.circle.fill" : "play.fill"); Text(isActive(profile) ? "正在使用" : "使用此布局") }
+                    }.buttonStyle(DockGlassButtonStyle(prominent: !isActive(profile))).disabled(isActive(profile) || (profile.kind == .native && store.applyingNative))
                 }
 
                 preview(profile)
@@ -144,6 +163,9 @@ struct ManagerView: View {
                     Spacer()
                     if !selectedItems.isEmpty {
                         Text("已选 \(selectedItems.count)").font(.caption).foregroundStyle(DockTheme.secondary)
+                        if selectedItems.count == 1, let item = profile.items.first(where: { selectedItems.contains($0.id) }), item.kind != .spacer {
+                            Button { edit(item, profile: profile) } label: { Label("编辑", systemImage: "pencil") }.buttonStyle(QuietButtonStyle())
+                        }
                         Button("复制") { duplicateSelection(in: profile) }.buttonStyle(QuietButtonStyle())
                         Button("移除") { store.removeItems(selectedItems, from: profile.id); selectedItems = []; selectionAnchor = nil }.buttonStyle(QuietButtonStyle())
                         Button { selectedItems = []; selectionAnchor = nil } label: { Image(systemName: "xmark.circle") }.buttonStyle(.plain).help("取消选择")
@@ -157,14 +179,15 @@ struct ManagerView: View {
                     } label: {
                         VStack(spacing: 10) { Image(systemName: "plus").font(.system(size: 21, weight: .light)); Text(profile.kind == .custom ? "添加组件" : "添加应用").font(.system(size: 11)) }.frame(maxWidth: .infinity).frame(height: 120).foregroundStyle(DockTheme.secondary).background(RoundedRectangle(cornerRadius: 13).stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4])).foregroundStyle(Color(hex: "D6D5E4")))
                     }.buttonStyle(.plain)
+                        .onDrop(of: DockDragPayload.acceptedTypes, delegate: ItemReorderDelegate(itemID: nil, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
                 }
                 HStack(spacing: 10) {
                     Image(systemName: "keyboard").foregroundStyle(DockTheme.accent)
                     ShortcutRecorder(profileID: profile.id)
                     Text("通过菜单栏或快捷键切换布局").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
                     Spacer()
-                    Menu { ForEach(["8B7BF4", "5EAF97", "D49566", "699DCF", "D2799F"], id: \.self) { hex in Button(hex) { store.updateProfile(profile.id) { $0.color = hex } } } } label: { Label("布局颜色", systemImage: "paintpalette") }.menuStyle(.borderlessButton).frame(width: 95)
-                }.padding(16).background(Color(hex: "F0EEF9")).clipShape(RoundedRectangle(cornerRadius: 11))
+                    profileColors(profile)
+                }.padding(16).dockCard(cornerRadius: 16)
                 if let notice = store.notice { Label(notice, systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Color(hex: "4B9B7E")) }
             }.padding(.horizontal, 30).padding(.top, 8).padding(.bottom, 30)
         }
@@ -182,12 +205,12 @@ struct ManagerView: View {
                             else if item.kind == .spacer { Rectangle().fill(.white.opacity(0.2)).frame(width: 1, height: 38).padding(.horizontal, 4) }
                             else { AppIconView(item: item, size: 44).help(item.title) }
                         }
-                        .onDrag { beginDrag(item.id); return NSItemProvider(object: item.id.uuidString as NSString) }
-                        .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
+                        .onDrag { beginDrag(item.id); return dragProvider(in: profile) }
+                        .onDrop(of: DockDragPayload.acceptedTypes, delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
                     }
                     if profile.items.isEmpty { Text("添加应用，开始打造你的 Dock").font(.system(size: 12)).foregroundStyle(.white.opacity(0.7)).padding(18) }
                 }.padding(12)
-            }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: 640).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 20)).overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.25))); Spacer() }
+            }.fixedSize(horizontal: false, vertical: true).frame(maxWidth: 640).dockGlass(cornerRadius: 23); Spacer() }
             Spacer(minLength: 18)
             HStack { Spacer(); Text(profile.name).font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.7)); Spacer() }.padding(.bottom, 20)
         }
@@ -202,20 +225,25 @@ struct ManagerView: View {
     }
 
     private func itemCard(_ item: DockItem, profile: DockProfile) -> some View {
+        Button { select(item.id, in: profile) } label: {
         VStack(spacing: 10) {
             if let widget = item.widget { Image(systemName: widget.symbol).font(.system(size: 25, weight: .light)).foregroundStyle(DockTheme.accent).frame(height: 44) }
             else if item.kind == .spacer { Image(systemName: "rectangle.split.2x1").font(.system(size: 22, weight: .light)).foregroundStyle(DockTheme.secondary).frame(height: 44) }
             else { AppIconView(item: item, size: 44) }
-            Text(item.title.isEmpty ? item.widget?.title ?? (item.kind == .spacer ? "分隔符":"未命名项目") : item.title).font(.system(size: 11, weight: .medium)).lineLimit(1)
-            Text(item.widget?.category ?? (item.kind == .app ? "应用" : item.kind == .appGroup ? "应用分组" : item.kind == .folder ? "文件夹" : item.kind == .link ? "链接" : item.kind == .spacer ? "留白" : "文件")).font(.system(size: 9)).foregroundStyle(DockTheme.secondary)
-        }.frame(maxWidth: .infinity).frame(height: 120).background(selectedItems.contains(item.id) ? DockTheme.accent.opacity(0.08) : Color.white).clipShape(RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(selectedItems.contains(item.id) ? DockTheme.accent : DockTheme.line, lineWidth: selectedItems.contains(item.id) ? 2 : 1))
+            Text(itemTitle(item)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+            Text(item.widget?.category ?? (item.kind == .app ? "应用" : item.kind == .appGroup ? "应用分组" : item.kind == .folder ? "文件夹" : item.kind == .link ? "链接" : item.kind == .spacer ? "留白" : "文件")).font(.system(size: 10)).foregroundStyle(DockTheme.secondary)
+        }.frame(maxWidth: .infinity).frame(height: 124).dockCard(cornerRadius: 18)
+            .overlay(RoundedRectangle(cornerRadius: 18).fill(selectedItems.contains(item.id) ? DockTheme.accent.opacity(0.07) : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(selectedItems.contains(item.id) ? DockTheme.accent : .clear, lineWidth: 1.5))
             .overlay(alignment: .topTrailing) { if selectedItems.contains(item.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(DockTheme.accent).padding(9) } }
-            .contentShape(RoundedRectangle(cornerRadius: 13))
-            .onTapGesture(count: 2) { edit(item, profile: profile) }
-            .onTapGesture { select(item.id, in: profile) }
+        }.buttonStyle(.plain)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+            .simultaneousGesture(TapGesture(count: 2).onEnded { if item.kind != .spacer { edit(item, profile: profile) } })
+            .accessibilityLabel(itemTitle(item))
+            .accessibilityHint("选中后可编辑、复制或移除；支持 Command 和 Shift 多选。")
             .accessibilityAddTraits(selectedItems.contains(item.id) ? .isSelected : [])
-            .onDrag { beginDrag(item.id); return NSItemProvider(object: item.id.uuidString as NSString) }
-            .onDrop(of: [.text], delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
+            .onDrag { beginDrag(item.id); return dragProvider(in: profile) }
+            .onDrop(of: DockDragPayload.acceptedTypes, delegate: ItemReorderDelegate(itemID: item.id, profileID: profile.id, dragging: $dragging, store: store, selection: $selectedItems))
             .contextMenu {
                 if item.kind != .spacer && item.kind != .widget { Button("打开") { AppService.open(item) } }
                 if item.kind != .spacer { Button("编辑名称与图标…") { edit(item, profile: profile) } }
@@ -225,6 +253,32 @@ struct ManagerView: View {
                 Divider()
                 Button(actionIDs(item).count > 1 ? "移除所选项目" : "移除", role: .destructive) { let ids = actionIDs(item); store.removeItems(ids, from: profile.id); selectedItems.subtract(ids) }
             }
+    }
+
+    private func itemTitle(_ item: DockItem) -> String { item.title.isEmpty ? item.widget?.title ?? (item.kind == .spacer ? "分隔符" : "未命名项目") : item.title }
+    private func isActive(_ profile: DockProfile) -> Bool { profile.kind == .custom ? store.archive.activeCustomID == profile.id : store.archive.activeNativeID == profile.id }
+    private func loadProfileName() { nameProfileID = store.selected?.id; nameDraft = store.selected?.name ?? "" }
+    private func commitProfileName() {
+        guard let id = nameProfileID, let profile = store.profiles.first(where: { $0.id == id }) else { return }
+        let value = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.isEmpty, value != profile.name { store.updateProfile(id) { $0.name = value } }
+        else if value.isEmpty { nameDraft = profile.name }
+    }
+    private func dragProvider(in profile: DockProfile) -> NSItemProvider {
+        let ids = profile.items.filter { selectedItems.contains($0.id) }.map(\.id)
+        return DockDragPayload(sourceProfileID: profile.id, orderedItemIDs: ids).itemProvider
+    }
+    private func profileColors(_ profile: DockProfile) -> some View {
+        HStack(spacing: 8) {
+            Text("布局颜色").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
+            ForEach(Array(zip(["8B7BF4", "5EAF97", "D49566", "699DCF", "D2799F"], ["紫罗兰", "鼠尾草", "暖杏", "雾蓝", "玫瑰"])), id: \.0) { hex, name in
+                Button { store.updateProfile(profile.id) { $0.color = hex } } label: {
+                    Circle().fill(Color(hex: hex)).frame(width: 20, height: 20)
+                        .overlay { if profile.color.uppercased() == hex { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white) } }
+                        .padding(4).contentShape(Circle())
+                }.buttonStyle(.plain).help(name).accessibilityLabel(name).accessibilityAddTraits(profile.color.uppercased() == hex ? .isSelected : [])
+            }
+        }
     }
 
     private func select(_ id: UUID, in profile: DockProfile) {
@@ -240,6 +294,7 @@ struct ManagerView: View {
     private func beginDrag(_ id: UUID) {
         if !selectedItems.contains(id) { selectedItems = [id]; selectionAnchor = id }
         dragging = id
+        interactions.dragging = true
     }
     private func actionIDs(_ item: DockItem) -> Set<UUID> { selectedItems.contains(item.id) ? selectedItems : [item.id] }
     private func duplicateSelection(in profile: DockProfile, fallback: DockItem? = nil) {
@@ -268,15 +323,38 @@ struct ManagerView: View {
         .menuStyle(.borderlessButton).fixedSize()
     }
     private var linkSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("添加网页链接").font(.title2.bold())
-            TextField("名称", text: $linkTitle).textFieldStyle(.roundedBorder)
-            TextField("https://example.com", text: $linkURL).textFieldStyle(.roundedBorder)
-            HStack { Spacer(); Button("取消") { showingLink = false }; Button("添加") {
-                guard let url = URL(string: linkURL), ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return }
-                store.addItems([DockItem(kind: .link, title: linkTitle.isEmpty ? url.host! : linkTitle, target: url.absoluteString)]); showingLink = false; linkTitle = ""; linkURL = "https://"
-            }.buttonStyle(.borderedProminent).disabled(URL(string: linkURL)?.host == nil) }
-        }.padding(28).frame(width: 420)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 14) {
+                Image(systemName: "link").font(.system(size: 24)).foregroundStyle(DockTheme.accent).frame(width: 52, height: 52).dockGlass(cornerRadius: 17)
+                VStack(alignment: .leading, spacing: 5) { Text("添加网页链接").font(.title2.weight(.semibold)); Text("常用网站，一点就到。").font(.caption).foregroundStyle(.secondary) }
+            }
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) { Text("网址").font(.caption.weight(.medium)); TextField("example.com 或 https://example.com", text: $linkURL).textFieldStyle(.roundedBorder) }
+                VStack(alignment: .leading, spacing: 6) { Text("名称（可选）").font(.caption.weight(.medium)); TextField("留空时使用网站域名", text: $linkTitle).textFieldStyle(.roundedBorder) }
+                Text(linkURL.isEmpty || validatedLinkURL != nil ? "未填写协议时会使用 HTTPS。" : "请输入有效的 HTTP 或 HTTPS 网址。")
+                    .font(.caption).foregroundStyle(linkURL.isEmpty || validatedLinkURL != nil ? Color.secondary : Color.red)
+            }.padding(18).dockCard(cornerRadius: 18)
+            HStack {
+                Spacer()
+                Button("取消") { showingLink = false }.buttonStyle(DockGlassButtonStyle()).keyboardShortcut(.cancelAction)
+                Button("添加链接", action: addLink).buttonStyle(DockGlassButtonStyle(prominent: true)).keyboardShortcut(.defaultAction).disabled(validatedLinkURL == nil)
+            }
+        }.padding(28).frame(width: 440).background(DockAppBackdrop())
+    }
+    private var validatedLinkURL: URL? {
+        var value = linkURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.contains("://") { value = "https://" + value }
+        guard let parts = URLComponents(string: value), let url = parts.url,
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              let host = parts.host, !host.isEmpty, !host.contains(where: \.isWhitespace),
+              parts.user == nil, parts.password == nil else { return nil }
+        return url
+    }
+    private func addLink() {
+        guard let url = validatedLinkURL else { return }
+        let title = linkTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.addItems([DockItem(kind: .link, title: title.isEmpty ? url.host ?? "网页" : title, target: url.absoluteString)])
+        showingLink = false; linkTitle = ""; linkURL = ""
     }
     private var emptyState: some View { VStack(spacing: 12) { BrandMark(size: 60); Text("给你的桌面一个新开始。").font(.title2); Button("创建自定义 Dock") { store.createProfile(kind: .custom) }.buttonStyle(.borderedProminent) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
     private var about: some View {
@@ -285,8 +363,9 @@ struct ManagerView: View {
             Text("OpenDock").font(.system(size: 32, weight: .semibold))
             Text("你的桌面，由你安排。").font(.system(size: 14)).foregroundStyle(DockTheme.secondary)
             Text("原生 macOS · 开源 · 无账号 · 无遥测").font(.system(size: 11)).foregroundStyle(DockTheme.accent)
-            Text("v" + (Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.2.0") + " Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
+            Text("v" + (Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "0.3.0") + " Beta · MIT License").font(.system(size: 11)).foregroundStyle(DockTheme.secondary)
             Link("查看源代码 ↗", destination: URL(string: "https://github.com/myh66/opendock")!).padding(.top, 10)
+            Button("重新查看使用引导") { store.tourPresented = true }.buttonStyle(DockGlassButtonStyle())
             Text("基于 Dockset 公开功能说明独立实现。\nOpenDock 与 Dockset 及其开发者无关联。")
                 .font(.system(size: 11)).foregroundStyle(DockTheme.secondary).multilineTextAlignment(.center).padding(.top, 25)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -294,7 +373,7 @@ struct ManagerView: View {
 }
 
 struct ItemReorderDelegate: DropDelegate {
-    let itemID: UUID
+    let itemID: UUID?
     let profileID: UUID
     @Binding var dragging: UUID?
     let store: AppStore
@@ -302,8 +381,37 @@ struct ItemReorderDelegate: DropDelegate {
     func dropEntered(info: DropInfo) {
         guard let dragging else { return }
         if let ids = selection?.wrappedValue, ids.contains(dragging), ids.count > 1 { store.moveItems(ids, to: itemID, in: profileID) }
-        else { store.moveItem(dragging, before: itemID, in: profileID) }
+        else { store.moveItems([dragging], to: itemID, in: profileID) }
     }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool { dragging = nil; return true }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: dragging == nil ? .copy : .move) }
+    func performDrop(info: DropInfo) -> Bool {
+        if let id = dragging, store.profiles.first(where: { $0.id == profileID })?.items.contains(where: { $0.id == id }) == true {
+            let ids = selection?.wrappedValue.contains(id) == true ? selection!.wrappedValue : [id]
+            store.moveItems(ids, to: itemID, in: profileID)
+            dragging = nil; DockInteractionState.shared.dragging = false
+            return true
+        }
+        let providers = info.itemProviders(for: DockDragPayload.acceptedTypes)
+        guard !providers.isEmpty else { return false }
+        DockDragPayload.load(from: providers, profiles: store.profiles) { payload in
+            defer { dragging = nil; DockInteractionState.shared.dragging = false }
+            guard let payload, let target = store.profiles.first(where: { $0.id == profileID }),
+                  let items = payload.resolvedItems(in: store.profiles) else { return }
+            guard target.kind == .custom || items.allSatisfy({ $0.kind == .app || $0.kind == .spacer }) else {
+                store.notice = "macOS 布局只能接收应用和分隔符。"; return
+            }
+            if payload.sourceProfileID == profileID && payload.runningItem == nil {
+                store.moveItems(Set(items.map(\.id)), to: itemID, in: profileID)
+                selection?.wrappedValue = Set(items.map(\.id))
+            } else {
+                let copies = items.map(AppStore.independentCopy)
+                store.updateProfile(profileID) { profile in
+                    let index = profile.items.firstIndex(where: { $0.id == itemID }) ?? profile.items.count
+                    profile.items.insert(contentsOf: copies, at: index)
+                }
+                selection?.wrappedValue = Set(copies.map(\.id))
+            }
+        }
+        return true
+    }
 }

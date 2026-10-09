@@ -18,6 +18,98 @@ import Combine
     }
 }
 
+struct WidgetPopoverIconButton: View {
+    let symbol: String
+    let label: String
+    var prominent = false
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) { Image(systemName: symbol).frame(width: 16, height: 16) }
+            .buttonStyle(DockGlassButtonStyle(prominent: prominent))
+            .help(label).accessibilityLabel(label)
+    }
+}
+
+struct WidgetPopoverHeader<Actions: View>: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+    var subtitle: String?
+    let onClose: () -> Void
+    let actions: Actions
+    init(title: String, symbol: String, tint: Color, subtitle: String? = nil,
+         onClose: @escaping () -> Void, @ViewBuilder actions: () -> Actions) {
+        self.title = title; self.symbol = symbol; self.tint = tint; self.subtitle = subtitle
+        self.onClose = onClose; self.actions = actions()
+    }
+    var body: some View {
+        DockGlassGroup(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol).font(.system(size: 17, weight: .medium)).foregroundStyle(tint)
+                    .frame(width: 34, height: 34).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.headline).lineLimit(1)
+                    if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) { actions; WidgetPopoverIconButton(symbol: "xmark", label: "关闭", action: onClose).keyboardShortcut(.cancelAction) }
+            }.padding(11).dockGlass(cornerRadius: 18)
+        }
+    }
+}
+
+/// Only an overflowing, visible credit animates; VoiceOver always receives the full text.
+struct WidgetMarqueeText: View {
+    let text: String
+    var font: Font = .caption
+    var lineHeight: CGFloat = 16
+    var staticLines = 1
+    var enabled = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var textWidth: CGFloat = 0
+    @State private var viewportWidth: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    private var overflow: CGFloat { max(0, textWidth - viewportWidth) }
+    private var animationKey: String { "\(text)|\(textWidth)|\(viewportWidth)|\(enabled)|\(reduceMotion)" }
+    var body: some View {
+        Group {
+            if reduceMotion {
+                Text(text).font(font).lineLimit(staticLines).fixedSize(horizontal: false, vertical: true)
+            } else {
+                GeometryReader { geometry in
+                    Text(text).font(font).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        .background(GeometryReader { reader in Color.clear.preference(key: WidgetMarqueeWidth.self, value: reader.size.width) })
+                        .offset(x: offset)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                        .clipped()
+                        .onAppear { viewportWidth = geometry.size.width }
+                        .onChange(of: geometry.size.width) { viewportWidth = $0 }
+                }.frame(height: lineHeight)
+            }
+        }
+        .onPreferenceChange(WidgetMarqueeWidth.self) { width in if abs(width - textWidth) > 0.5 { textWidth = width } }
+        .task(id: animationKey) { await animateCredit() }
+        .help(text).accessibilityElement(children: .ignore).accessibilityLabel(text)
+    }
+    @MainActor private func animateCredit() async {
+        withAnimation(nil) { offset = 0 }
+        guard enabled, !reduceMotion, textWidth.isFinite, viewportWidth.isFinite, overflow.isFinite, overflow > 1, viewportWidth > 0 else { return }
+        let duration = min(30, max(2, Double(overflow / 24)))
+        do {
+            while !Task.isCancelled {
+                try await Task.sleep(nanoseconds: 2_500_000_000)
+                withAnimation(.linear(duration: duration)) { offset = -overflow }
+                try await Task.sleep(nanoseconds: UInt64((duration + 2.5) * 1_000_000_000))
+                withAnimation(.linear(duration: duration)) { offset = 0 }
+                try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            }
+        } catch { /* Disappearance or a changed track cancels the view's animation task. */ }
+    }
+}
+private struct WidgetMarqueeWidth: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 @MainActor enum WidgetMetricsLeases {
     private static var owners = Set<UUID>()
     static func acquire(_ id: UUID) { if owners.insert(id).inserted { SystemMetrics.shared.start() } }

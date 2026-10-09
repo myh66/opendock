@@ -11,11 +11,13 @@ This is an independent implementation inspired by Dockset's publicly documented 
 - Custom and native macOS Dock profiles, with an editor for apps, files, folders, URLs, spacers, and app groups.
 - A separate native Dock panel with edge placement, size, material, auto-hide, running apps, and widgets.
 - Menu bar and global keyboard switching, JSON import/export, and backups before native Dock changes.
-- Twenty-five widgets, including alarms, weather forecasts, network activity, stocks/watchlists, Stripe, Paddle, Shopify, AI Limits, and AI Activity.
+- Twenty-nine widget entries: the existing twenty-five plus NetEase Music, IBKR, Ollama, and Shadowrocket. NetEase launches the app and saved official links; IBKR reads local Gateway balances and positions; Ollama reads local model status; Shadowrocket shows client state and a system proxy summary.
 - Native Focus Filters and Shortcuts, configurable per-profile hotkeys, group selection/reordering, window preview caching, and checked GitHub updates.
 - Seven AI quota providers with explicit connections, read-only queries, shared connections, and display styles. AI Activity supports Codex, Claude, Cursor, and Grok, with source-specific counters and date ranges.
 
-Version 0.2.0 is a development Beta. The [feature matrix](docs/PARITY.md), [integration guide](docs/INTEGRATIONS.md), and [verification record](docs/VERIFICATION.md) distinguish implementation from actual account and device testing. Financial and AI accounts, system permissions, full-screen/multi-Space behavior, and installation updates have not all been tested end to end.
+Version 0.3.0 Beta 1 gives the manager, settings, onboarding, and item editor consistent native glass controls, grouped cards, and adaptive layouts. It follows light/dark appearance and system accessibility display settings. Native Liquid Glass requires macOS 26+ and a supporting build toolchain; earlier systems or toolchains use a material fallback.
+
+This is a development Beta. New entries do not provide NetEase playback controls, IBKR trading, Ollama generation/model downloads, or Shadowrocket VPN/node controls. The [feature matrix](docs/PARITY.md), [integration guide](docs/INTEGRATIONS.md), and [verification record](docs/VERIFICATION.md) distinguish implementation from actual account and device testing. Financial and AI accounts, system permissions, full-screen/multi-Space behavior, and installation updates have not all been tested end to end.
 
 ## Build
 
@@ -27,6 +29,8 @@ swift test
 ./scripts/build-app.sh
 open build/OpenDock.app
 ```
+
+Native Liquid Glass additionally requires Swift 6.2+ and the macOS 26+ SDK. Older toolchains can build the material fallback.
 
 Use the application bundle for permission-dependent features, login items, and URL handling. `swift run OpenDock` is useful for basic UI development, but a terminal process has a different permission identity.
 

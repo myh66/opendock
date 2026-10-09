@@ -1,8 +1,38 @@
 # 验证证据
 
-2026-10-08，OpenDock **0.2.0 Beta 1**。代码覆盖、自动测试、实际界面与外部账号验证分别记录。
+代码覆盖、自动测试、实际界面与外部账号验证分别记录。每版证据单独列出，历史结果不代表当前源码或发布包已完成相同检查。
 
-## 已完成
+## 0.3.0 Beta 1 — 2026-10-09
+
+### 已完成
+
+| 检查 | 结果与范围 |
+| --- | --- |
+| 完整单元测试 | 本机最终 **122 项通过，0 失败，8.148 秒**（Swift 6.4）。保留 91 项原有测试，新增结构化拖拽 4 项、IBKR 6 项、Ollama 10 项、网易云链接 6 项、系统代理 5 项；覆盖账户 BASE 汇总、地址草稿导出保护、响应数值边界和链接规范化。 |
+| Release 构建 | 最终源码的 Release 构建通过，arm64、macOS 13 编译目标；原生 Liquid Glass 在 macOS 27 验收，旧工具链路径由 CI 检查。 |
+| App Intents 与签名 | 最终应用包生成布局 Entity/Query、Switch Intent、Focus Filter 与 App Shortcuts 元数据，ad hoc 签名检查通过。尚未配置或执行真实 Focus Filter / Shortcuts 自动化。 |
+| 隔离界面 | 隔离布局下验收管理/设置、浅色与深色组件库和引导；修复玻璃背景把文字一起模糊的问题，实际确认标题与选项清晰。目录 **29 种**；按服务搜索、空结果/清除、添加后关闭选择器、Ollama 文本框中 ⌘W 关闭并保留管理窗、IBKR/Shadowrocket Escape 关闭。 |
+| 新组件的验证范围 | 网易云组件实际识别本机运行状态，使用合成官方链接验收收藏保存，未执行歌曲播放。Shadowrocket 显示真实客户端进程与系统代理只读摘要，未修改网络。Ollama 合成敏感地址显示“仅内存未保存”，布局 JSON 确认不含合成秘密；未进行真实 Ollama/IBKR 读取。边界见 [连接指南](INTEGRATIONS.md)。 |
+
+上述界面检查使用临时布局，未写入个人配置、未请求新权限。关于页重播引导、选择模式后仍保留原设置、跳过后保留两个布局均已实际确认。最终 ZIP / DMG 创建，DMG 校验通过，附 SHA-256；测试前后系统 Dock 的 39 个固定项目与隐藏/延迟/动画设置一致。
+
+### 待完成与尚未实测
+
+- 多选跨布局拖拽、拖出后取消、自定义 Dock 自动隐藏与缩放的完整实机组合；减少透明度、增加对比度及减少动态效果的系统组合验收。
+- IBKR 真实 Client Portal Gateway 登录、可信本机 HTTPS 证书、账本／账户切换与持仓分页；Ollama 实际本机模型状态读取；网易云和 Shadowrocket 的客户端启动操作。
+- 原生 Dock 布局写入、连续切换、失败回滚、替换模式退出恢复；Focus Filter 与 Shortcuts 的系统注册发现和真实执行。
+- 多屏、全屏、多个 Space、窗口避让，以及日历／提醒事项／通知／定位／播放器／登录启动的授权与升级流程；AirDrop 接收设备传输。
+- 商业账号、七个 AI 额度来源与四个 AI 活动来源的实号端到端验证；覆盖安装更新、Intel/macOS 13/14 实机、Universal Binary、Developer ID、公证与 App Store 分发。
+
+本版是 **arm64、ad hoc 签名、未公证的开发 Beta**。不能宣称 Dockset 0.2.6 的全部细节已在所有环境完整实测。功能覆盖见 [功能矩阵](PARITY.md)。
+
+### 本版持续集成
+
+本版最终提交的 CI 结果待补充，入口为 [GitHub Actions](https://github.com/myh66/opendock/actions)。下列 0.2.0 的成功工作流仅作为历史证据。
+
+## 0.2.0 Beta 1 — 2026-10-08（历史证据）
+
+### 当版已完成
 
 | 检查 | 结果与范围 |
 | --- | --- |
@@ -22,7 +52,7 @@
 
 隔离界面测试通过 `--ui-test` 和 `OPENDOCK_TEST_ARCHIVE` 指定临时布局及集成缓存；启动/退出跳过原生替代模式恢复和 AX 窗口尺寸调整。合成数据、脚本、测试日志没有纳入发布包。
 
-## 尚未完成的实际验证
+### 当版尚未完成的实际验证
 
 - 原生布局写入、快速连续切换、失败回滚、替代模式退出恢复；实现有序列化/队列/快照测试，但没有修改本机 Dock 验收。
 - Focus Filter 和 Shortcuts 的系统注册发现与真实执行；元数据存在不等于已配置自动化。
@@ -31,8 +61,8 @@
 - Stripe、Paddle、Shopify 与七种 AI 来源的实号端到端验证。Gemini 加密凭据、旧 Grok 日志、复杂 Stripe MRR 和非稳定客户端接口限制见 [连接指南](INTEGRATIONS.md)。
 - 覆盖安装更新、Intel/macOS 13/14 实机、Universal Binary、Developer ID、公证与 App Store 分发。
 
-此包为 **arm64、ad hoc 签名、未公证的开发 Beta**。不能宣称 Dockset 0.2.6 全部细节已在所有环境完整实测。逐项覆盖见 [功能矩阵](PARITY.md)。
+该版发布包为 **arm64、ad hoc 签名、未公证的开发 Beta**。这些检查不代表 Dockset 0.2.6 全部细节已在所有环境完整实测。
 
-## 持续集成
+### 当版持续集成
 
-公开仓库工作流执行构建、91 项测试、带 App Intents 元数据的应用封装与 ZIP 保存，结果见对应提交的 [Actions](https://github.com/myh66/opendock/actions)。提交 `1add8e8` 的 [完整 CI](https://github.com/myh66/opendock/actions/runs/37773079887) 已通过：macOS 15 arm64、Apple Swift 6.1.2，91 项测试 0 失败（7.586 秒），元数据/签名验证与 ZIP 产物上传成功。本机使用 Swift 6.4。打包脚本按编译器能力选择常量提取参数，并验证切换 action、Focus Filter、布局 entity 与 App Shortcut；历史初版结果不能替代本版发布检查。
+0.2.0 对应的公开仓库工作流执行构建、91 项测试、带 App Intents 元数据的应用封装与 ZIP 保存。提交 `1add8e8` 的 [完整 CI](https://github.com/myh66/opendock/actions/runs/37773079887) 已通过：macOS 15 arm64、Apple Swift 6.1.2，91 项测试 0 失败（7.586 秒），元数据/签名验证与 ZIP 产物上传成功。当版本机使用 Swift 6.4。打包脚本按编译器能力选择常量提取参数，并验证切换 action、Focus Filter、布局 entity 与 App Shortcut；该结果不能替代 0.3.0 发布检查。

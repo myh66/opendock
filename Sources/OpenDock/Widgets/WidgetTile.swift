@@ -43,7 +43,9 @@ struct WidgetTile: View {
 
     var body: some View {
         Group {
-            if [.stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity].contains(kind) {
+            if [.neteaseMusic, .ibkr, .ollama, .shadowrocket].contains(kind) {
+                extendedTile
+            } else if [.stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity].contains(kind) {
                 IntegrationWidgetTile(item: item, compact: compact, onUpdate: onUpdate)
             } else if shouldHideMusic {
                 EmptyView()
@@ -53,6 +55,16 @@ struct WidgetTile: View {
         .onChange(of: item.configuration) { updated in if config != updated { config = updated } }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in if kind == .nowPlaying { musicRevision += 1 } }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in if kind == .nowPlaying { musicRevision += 1 } }
+    }
+
+    @ViewBuilder private var extendedTile: some View {
+        switch kind {
+        case .neteaseMusic: NeteaseMusicWidgetTile(item: item, compact: compact, onUpdate: onUpdate)
+        case .ibkr: IBKRWidgetTile(item: item, compact: compact, onUpdate: onUpdate)
+        case .ollama: OllamaWidgetTile(item: item, compact: compact, onUpdate: onUpdate)
+        case .shadowrocket: ShadowrocketWidgetTile(item: item, compact: compact, onUpdate: onUpdate)
+        default: EmptyView()
+        }
     }
 
     private var localTile: some View {
@@ -72,17 +84,20 @@ struct WidgetTile: View {
                             .font(.system(size: 13, weight: .semibold, design: timeSensitive ? .monospaced : .default))
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
-                        Text(subtitle(at: context.date))
-                            .font(.system(size: 10))
-                            .foregroundStyle(noteTextColor?.opacity(0.65) ?? .secondary)
-                            .lineLimit(1)
-                    }
+                        if kind == .nowPlaying, !runtime.musicArtist.isEmpty {
+                            WidgetMarqueeText(text: runtime.musicArtist, font: .system(size: 10), lineHeight: 13, enabled: runtime.musicState == "playing")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(subtitle(at: context.date)).font(.system(size: 10))
+                                .foregroundStyle(noteTextColor?.opacity(0.65) ?? .secondary).lineLimit(1)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 11)
                 .frame(width: compact ? 132 : 140, height: 58)
                 .foregroundStyle(noteTextColor ?? .primary)
-                .background(noteBackground ?? tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                .background { tileSurface }
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(tint.opacity(0.1)))
                 .contentShape(RoundedRectangle(cornerRadius: 14))
             }
@@ -142,27 +157,27 @@ struct WidgetTile: View {
         }
     }
 
+    @ViewBuilder private var tileSurface: some View {
+        if let noteBackground { RoundedRectangle(cornerRadius: 14).fill(noteBackground) }
+        else { DockGlassSurface(cornerRadius: 14, tint: tint.opacity(0.09), interactive: true) }
+    }
+
     private var popover: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 9) {
-                Image(systemName: kind.symbol).foregroundStyle(tint)
-                Text(kind.title).font(.headline)
-                Spacer()
-                Button { presented = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                    .help("关闭")
-            }
-            Divider()
+            WidgetPopoverHeader(title: item.title.isEmpty ? kind.title : item.title, symbol: kind.symbol, tint: tint, subtitle: kind.category,
+                                onClose: { presented = false }) { EmptyView() }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) { widgetControls }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(14).dockCard(cornerRadius: 16)
             }.frame(maxHeight: 430)
             if runtime.busy { ProgressView().controlSize(.small) }
             if !runtime.message.isEmpty { Text(runtime.message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
         }
         .padding(18)
         .frame(width: 338)
+        .dockCard(cornerRadius: 22)
+        .textFieldStyle(.roundedBorder)
+        .buttonStyle(DockGlassButtonStyle())
         .onExitCommand { presented = false }
         .background {
             Button("关闭小组件") { presented = false }.keyboardShortcut("w", modifiers: .command).frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
@@ -192,7 +207,7 @@ struct WidgetTile: View {
         case .airDrop: airDropControls
         case .alarm: alarmControls
         case .network: networkControls
-        case .stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity: EmptyView()
+        case .stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity, .neteaseMusic, .ibkr, .ollama, .shadowrocket: EmptyView()
         }
     }
 
@@ -204,7 +219,7 @@ struct WidgetTile: View {
             }
             if kind == .worldClock {
                 Text("时区").font(.caption).foregroundStyle(.secondary)
-                TextField("搜索城市或时区，例如 Shanghai", text: $timezoneSearch)
+                TextField("搜索城市或时区，例如 Shanghai", text: $timezoneSearch).onChange(of: timezoneSearch) { set("worldClockSearchDraft", $0) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(filteredTimezones.prefix(30), id: \.self) { identifier in
@@ -243,7 +258,7 @@ struct WidgetTile: View {
                 else { Text("点击开始计时").foregroundStyle(.secondary) }
             }
             HStack {
-                TextField("分钟", text: $durationMinutes).frame(width: 65)
+                TextField("分钟", text: $durationMinutes).frame(width: 65).onChange(of: durationMinutes) { set("durationDraft", $0) }
                 Text("分钟").foregroundStyle(.secondary)
                 Button("设定") {
                     let parsed = Double(durationMinutes)
@@ -263,7 +278,7 @@ struct WidgetTile: View {
                         set("deadline", String(date.timeIntervalSince1970))
                         if config["timerNotification"] == "true" { Task { await scheduleTimer(date) } }
                     }
-                }.buttonStyle(.borderedProminent).tint(tint)
+                }.buttonStyle(DockGlassButtonStyle(prominent: true)).tint(tint)
                 Button("重置") { update(["deadline": "", "remaining": String(defaultDuration)]); LocalWidgetNotifications.shared.cancel(id: item.id, channel: "timer") }
             }
             Toggle("结束时发送系统通知", isOn: Binding(get: { config["timerNotification"] == "true" }, set: { enabled in
@@ -310,7 +325,7 @@ struct WidgetTile: View {
                             runtime.message = "闹钟已交由 macOS 排程。"
                         } catch { runtime.message = error.localizedDescription }
                     }
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(DockGlassButtonStyle(prominent: true))
                 if config["alarmEnabled"] == "true" { Button("停用") { set("alarmEnabled", "false"); LocalWidgetNotifications.shared.cancel(id: item.id, channel: "alarm") } }
             }
             Text("系统通知会在 App 退出后继续提醒。响铃与横幅受 macOS 通知设置、专注模式和系统休眠状态影响。一次性闹钟不会重复。").font(.caption).foregroundStyle(.secondary)
@@ -329,7 +344,7 @@ struct WidgetTile: View {
                 Button(WidgetState.number(config, "started") > 0 ? "暂停" : "开始") {
                     if WidgetState.number(config, "started") > 0 { update(["elapsed": String(WidgetState.elapsed(config, at: .now)), "started": ""]) }
                     else { set("started", String(Date.now.timeIntervalSince1970)) }
-                }.buttonStyle(.borderedProminent).tint(tint)
+                }.buttonStyle(DockGlassButtonStyle(prominent: true)).tint(tint)
                 Button("计次") {
                     let laps = (config["laps"] ?? "").split(separator: "|").map(String.init)
                     let updated = Array((laps + [WidgetState.durationText(WidgetState.elapsed(config, at: .now))]).suffix(50))
@@ -378,18 +393,18 @@ struct WidgetTile: View {
             ProgressView(value: min(1, drinks ? Double(today.count) / drinkGoal : Double(total) / goal)).tint(tint)
             Picker("饮品", selection: $waterDrink) { ForEach(["水", "茶", "咖啡", "其他"], id: \.self) { Text($0).tag($0) } }.onChange(of: waterDrink) { set("waterDrink", $0) }
             HStack {
-                TextField("可不填", text: $waterAmount).frame(width: 85)
+                TextField("可不填", text: $waterAmount).frame(width: 85).onChange(of: waterAmount) { set("waterAmountDraft", $0) }
                 Text("ml（选填）").font(.caption).foregroundStyle(.secondary)
                 Button("记录") {
                     let amount = Int(waterAmount).map { min(5000, max(1, $0)) }
                     set("waterHistory", WidgetState.encodedWater(entries + [WaterEntry(timestamp: Date.now.timeIntervalSince1970, milliliters: amount, drink: waterDrink)]))
-                }.buttonStyle(.borderedProminent).tint(tint).disabled(config["waterLoggingPaused"] == "true")
+                }.buttonStyle(DockGlassButtonStyle(prominent: true)).tint(tint).disabled(config["waterLoggingPaused"] == "true")
             }
             Toggle("暂停记录", isOn: boolBinding("waterLoggingPaused"))
-            Picker("目标单位", selection: Binding(get: { config["waterGoalUnit"] ?? "ml" }, set: { set("waterGoalUnit", $0); waterGoal = $0 == "drinks" ? String(Int(drinkGoal)) : String(Int(goal)) })) { Text("毫升").tag("ml"); Text("杯数").tag("drinks") }.pickerStyle(.segmented)
+            Picker("目标单位", selection: Binding(get: { config["waterGoalUnit"] ?? "ml" }, set: { set("waterGoalUnit", $0); waterGoal = config["waterGoalDraft-" + $0] ?? ($0 == "drinks" ? String(Int(drinkGoal)) : String(Int(goal))) })) { Text("毫升").tag("ml"); Text("杯数").tag("drinks") }.pickerStyle(.segmented)
             HStack {
                 Text("每日目标")
-                TextField("目标", text: $waterGoal).frame(width: 65)
+                TextField("目标", text: $waterGoal).frame(width: 65).onChange(of: waterGoal) { set("waterGoalDraft-" + (config["waterGoalUnit"] ?? "ml"), $0) }
                 Text(drinks ? "杯" : "ml")
                 Button("保存") { let goal = min(drinks ? 100 : 10000, max(1, Int(waterGoal) ?? (drinks ? 8 : 2000))); set(drinks ? "waterDrinkGoal" : "waterGoal", String(goal)); waterGoal = String(goal) }
             }.font(.caption)
@@ -577,7 +592,7 @@ struct WidgetTile: View {
             }
         } else {
             unavailable("连接系统\(reminders ? "提醒事项" : "日历")", detail: "点击后，macOS 会请求访问权限。数据只在本机读取。", symbol: kind.symbol)
-            Button("允许访问") { runtime.connectCalendar(reminders: reminders, selection: calendarSelection) }.buttonStyle(.borderedProminent)
+            Button("允许访问") { runtime.connectCalendar(reminders: reminders, selection: calendarSelection) }.buttonStyle(DockGlassButtonStyle(prominent: true))
             Button("打开隐私设置") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_\(reminders ? "Reminders" : "Calendars")")!) }
         }
         if !runtime.accessMessage.isEmpty { Text(runtime.accessMessage).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -665,7 +680,7 @@ struct WidgetTile: View {
             TextField("快捷指令名称", text: $shortcutName).onChange(of: shortcutName) { set("shortcutName", $0) }
             HStack {
                 Button("运行") { set("shortcutName", shortcutName); runtime.runShortcut(shortcutName) }
-                    .buttonStyle(.borderedProminent).disabled(runtime.busy || shortcutName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(DockGlassButtonStyle(prominent: true)).disabled(runtime.busy || shortcutName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("读取快捷指令列表") { runtime.listShortcuts() }.disabled(runtime.busy)
             }
             ForEach(runtime.shortcutNames, id: \.self) { name in
@@ -701,8 +716,8 @@ struct WidgetTile: View {
                     if let art = runtime.musicArtwork { Image(nsImage: art).resizable().scaledToFill().frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 8)) }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(runtime.musicTitle).font(.title3).textSelection(.enabled)
-                        if !runtime.musicArtist.isEmpty { Text(runtime.musicArtist).foregroundStyle(.secondary) }
-                    }
+                        if !runtime.musicArtist.isEmpty { WidgetMarqueeText(text: runtime.musicArtist, font: .callout, lineHeight: 20, staticLines: 3, enabled: runtime.musicState == "playing").foregroundStyle(.secondary) }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 Text(runtime.musicState == "playing" ? "正在播放" : runtime.musicState == "paused" ? "已暂停" : "已停止").font(.caption).foregroundStyle(.secondary)
                 if runtime.musicDuration > 0 {
@@ -710,9 +725,9 @@ struct WidgetTile: View {
                     HStack { Text(WidgetState.durationText(runtime.musicPosition)); Spacer(); Text(WidgetState.durationText(runtime.musicDuration)) }.font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
                 HStack(spacing: 18) {
-                    Button { runtime.music(player: runtime.activeMusicPlayer, action: "previous") } label: { Image(systemName: "backward.end.fill") }.help("上一首")
-                    Button { runtime.music(player: runtime.activeMusicPlayer, action: "toggle") } label: { Image(systemName: runtime.musicState == "playing" ? "pause.fill" : "play.fill") }.help("播放或暂停")
-                    Button { runtime.music(player: runtime.activeMusicPlayer, action: "next") } label: { Image(systemName: "forward.end.fill") }.help("下一首")
+                    WidgetPopoverIconButton(symbol: "backward.end.fill", label: "上一首") { runtime.music(player: runtime.activeMusicPlayer, action: "previous") }
+                    WidgetPopoverIconButton(symbol: runtime.musicState == "playing" ? "pause.fill" : "play.fill", label: "播放或暂停", prominent: true) { runtime.music(player: runtime.activeMusicPlayer, action: "toggle") }
+                    WidgetPopoverIconButton(symbol: "forward.end.fill", label: "下一首") { runtime.music(player: runtime.activeMusicPlayer, action: "next") }
                 }.disabled(runtime.busy)
             }
             Button(runtime.musicTitle.isEmpty ? "连接" : "刷新曲目信息") { runtime.music(player: config["musicPlayer"] ?? "Music") }.disabled(runtime.busy)
@@ -742,7 +757,7 @@ struct WidgetTile: View {
                     saveAirDrop(pendingAirDrop + panel.urls)
                 }
                 }
-                Button("发送待发送内容") { shareAirDrop() }.buttonStyle(.borderedProminent).disabled(pendingAirDrop.isEmpty)
+                Button("发送待发送内容") { shareAirDrop() }.buttonStyle(DockGlassButtonStyle(prominent: true)).disabled(pendingAirDrop.isEmpty)
             }
             Button("在访达中打开隔空投送") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app/Contents/Applications/AirDrop.app")) }
         }
@@ -780,7 +795,7 @@ struct WidgetTile: View {
             if (config["alarmWeekdays"] ?? "").isEmpty && time <= date.timeIntervalSince1970 { return "已到时" }
             return Date(timeIntervalSince1970: time).formatted(date: .omitted, time: .shortened)
         case .network: return networkSummary
-        case .stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity: return kind.title
+        case .stock, .watchlist, .stripe, .paddle, .shopify, .aiLimits, .aiActivity, .neteaseMusic, .ibkr, .ollama, .shadowrocket: return kind.title
         }
     }
 
@@ -810,11 +825,14 @@ struct WidgetTile: View {
     private func synchronize() {
         config = item.configuration
         cityQuery = config["weatherCityDraft"] ?? config["weatherCity"] ?? ""
-        durationMinutes = String(Int(defaultDuration / 60))
+        timezoneSearch = config["worldClockSearchDraft"] ?? ""
+        durationMinutes = config["durationDraft"] ?? String(Int(defaultDuration / 60))
+        waterAmount = config["waterAmountDraft"] ?? "250"
         waterGoal = String(Int(WidgetState.boundedNumber(config, "waterGoal", default: 2000, range: 1...10000)))
         shortcutName = config["shortcutName"] ?? ""
         waterDrink = config["waterDrink"] ?? "水"
         if config["waterGoalUnit"] == "drinks" { waterGoal = String(Int(WidgetState.boundedNumber(config, "waterDrinkGoal", default: 8, range: 1...100))) }
+        waterGoal = config["waterGoalDraft-" + (config["waterGoalUnit"] ?? "ml")] ?? waterGoal
         let alarm = WidgetState.boundedNumber(config, "alarmDraft", default: WidgetState.boundedNumber(config, "alarmTime", default: Date.now.addingTimeInterval(3600).timeIntervalSince1970, range: 0...4_102_444_800), range: 0...4_102_444_800)
         alarmDate = Date(timeIntervalSince1970: alarm)
         alarmTitle = config["alarmTitleDraft"] ?? config["alarmTitle"] ?? "闹钟"

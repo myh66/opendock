@@ -22,7 +22,7 @@ struct OpenDockApp: App {
         .commands {
             CommandGroup(replacing: .newItem) { Button("新建自定义布局") { store.createProfile(kind: .custom) }.keyboardShortcut("n") }
             CommandGroup(after: .importExport) { Button("导入布局…") { store.importArchive() }; Button("导出布局…") { store.exportArchive() }.keyboardShortcut("e", modifiers: [.command, .shift]) }
-            CommandGroup(replacing: .appInfo) { Button("关于 OpenDock") { delegate.showManager() } }
+            CommandGroup(replacing: .appInfo) { Button("关于 OpenDock") { store.requestedPage = "about"; delegate.showManager() } }
         }
         MenuBarExtra { DockMenu().environmentObject(store) } label: {
             Label(store.settings.showActiveNameInMenuBar ? (store.settings.mode == .nativeOnly ? store.profiles.first { $0.id == store.archive.activeNativeID }?.name : store.activeCustom?.name) ?? "OpenDock" : "OpenDock", systemImage: "dock.rectangle")
@@ -73,16 +73,23 @@ final class OpenDockDelegate: NSObject, NSApplicationDelegate {
     private let hotkeys = GlobalHotkeyService()
     private var cancellables = Set<AnyCancellable>()
     private var terminating = false
+    private var recordingProfileID: UUID?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        if ProcessInfo.processInfo.arguments.contains("--ui-test") {
+            if ProcessInfo.processInfo.arguments.contains("--ui-test-dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+            else if ProcessInfo.processInfo.arguments.contains("--ui-test-light") { NSApp.appearance = NSAppearance(named: .aqua) }
+        }
         let store = AppStore.shared
         dockController = DockPanelController(store: store, openManager: { [weak self] in self?.showManager() })
         store.$archive.map { $0.profiles.map { profile in var copy = profile; copy.items = []; return copy } }.removeDuplicates().sink { [weak self] profiles in
-            self?.hotkeys.register(profiles: profiles) { index in
-                guard store.profiles.indices.contains(index) else { return }
-                store.activate(store.profiles[index])
-            }
-            if let indices = self?.hotkeys.unavailableIndices, !indices.isEmpty { store.notice = "部分快捷键被占用：" + indices.map { store.profiles[$0].name }.joined(separator: "、") + "。请在设置中重新录制。" }
+            self?.configureHotkeys(profiles)
+        }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .opendockShortcutRecordingChanged).receive(on: RunLoop.main).sink { [weak self] notification in
+            guard let self, let id = notification.userInfo?["profileID"] as? UUID, let recording = notification.userInfo?["recording"] as? Bool else { return }
+            if recording { self.recordingProfileID = id }
+            else if self.recordingProfileID == id { self.recordingProfileID = nil }
+            self.configureHotkeys(AppStore.shared.profiles)
         }.store(in: &cancellables)
         store.$archive.map(\.settings).removeDuplicates().sink { settings in
             let testing = ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--ui-test")
@@ -99,6 +106,15 @@ final class OpenDockDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             }
         }
+    }
+    private func configureHotkeys(_ profiles: [DockProfile]) {
+        guard recordingProfileID == nil else { hotkeys.unregister(); return }
+        hotkeys.register(profiles: profiles) { index in
+            guard profiles.indices.contains(index), let profile = AppStore.shared.profiles.first(where: { $0.id == profiles[index].id }) else { return }
+            AppStore.shared.activate(profile)
+        }
+        let unavailable = hotkeys.unavailableIndices.filter { profiles.indices.contains($0) }
+        if !unavailable.isEmpty { AppStore.shared.notice = "部分快捷键被占用：" + unavailable.map { profiles[$0].name }.joined(separator: "、") + "。请在设置中重新录制。" }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if ProcessInfo.processInfo.arguments.contains("--smoke-test") || ProcessInfo.processInfo.arguments.contains("--ui-test") { return .terminateNow }

@@ -21,6 +21,10 @@ final class DockPanelController {
     private var revealedUntil = Date.distantPast
     private var lastCycle = Date.distantPast
     private var gestureDelta:CGFloat = 0
+    private var pointerInteraction = false
+    private var visibilityTimerInterval:TimeInterval?
+    private var displayedProfileID:UUID?
+    private var displayedItemIDs = Set<UUID>()
     private var windowSpace = WindowSpaceService()
     private var lastReservation = Date.distantPast
     init(store:AppStore,openManager:@escaping()->Void) {
@@ -29,11 +33,21 @@ final class DockPanelController {
         NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in self?.update() }.store(in:&cancellables)
         for name in [NSWorkspace.didLaunchApplicationNotification,NSWorkspace.didTerminateApplicationNotification] { NSWorkspace.shared.notificationCenter.publisher(for:name).sink { [weak self] _ in self?.update() }.store(in:&cancellables) }
         WindowMonitor.shared.$minimized.map(\.count).removeDuplicates().sink { [weak self] _ in self?.update() }.store(in:&cancellables)
-        inputMonitor = NSEvent.addLocalMonitorForEvents(matching:[.scrollWheel,.swipe,.keyDown]) { [weak self] event in
-            guard let self, let panel = self.panel, event.window == panel || (panel.childWindows ?? []).contains(where:{$0 == event.window}) else { return event }
-            if event.type == .keyDown,event.modifierFlags.contains(.command),event.charactersIgnoringModifiers?.lowercased() == "w",WidgetPopoverCoordinator.shared.activeID != nil { WidgetPopoverCoordinator.shared.activeID = nil; return nil }
+        inputMonitor = NSEvent.addLocalMonitorForEvents(matching:[.scrollWheel,.swipe,.keyDown,.leftMouseDown,.leftMouseUp]) { [weak self] event in
+            guard let self, let panel = self.panel else { return event }
+            if event.type == .leftMouseUp {
+                self.pointerInteraction = false
+                // Defer until SwiftUI's drop/resize completion has processed mouse-up.
+                DispatchQueue.main.async { DockInteractionState.shared.dragging = false; DockInteractionState.shared.resizing = false }
+            }
+            guard event.window == panel || (panel.childWindows ?? []).contains(where:{$0 == event.window}) else { return event }
+            if event.type == .leftMouseDown { self.pointerInteraction = true; self.pointerAwaySince = nil; return event }
+            if event.type == .keyDown,WidgetPopoverCoordinator.shared.activeID != nil,
+               event.keyCode == 53 || (event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers?.lowercased() == "w") { WidgetPopoverCoordinator.shared.activeID = nil; return nil }
             guard event.type == .scrollWheel || event.type == .swipe else { return event }
-            guard WidgetPopoverCoordinator.shared.activeID == nil else { return nil }
+            // Popover scroll views must receive their own events; only Dock layout
+            // switching is suspended while a popover or resize is in progress.
+            guard WidgetPopoverCoordinator.shared.activeID == nil,!DockInteractionState.shared.resizing,!DockInteractionState.shared.dragging else { return event }
             let vertical = self.store.settings.position != .bottom
             let cross = vertical ? event.scrollingDeltaX : event.scrollingDeltaY
             let along = vertical ? event.scrollingDeltaY : event.scrollingDeltaX
@@ -45,23 +59,28 @@ final class DockPanelController {
                 if abs(self.gestureDelta) > 36 { self.cycle(self.gestureDelta > 0 ? -1:1); self.gestureDelta = 0 }
                 return nil
             }
+            if !DockInteractionState.shared.contentOverflows,abs(along) >= abs(cross) { return nil }
             return event
         }
         update()
     }
     deinit { timer?.invalidate(); if let inputMonitor { NSEvent.removeMonitor(inputMonitor) } }
-    func prepareForTermination() { timer?.invalidate(); panel?.orderOut(nil); handle?.orderOut(nil); windowSpace.restore() }
+    func prepareForTermination() { timer?.invalidate(); WidgetPopoverCoordinator.shared.activeID = nil; panel?.orderOut(nil); handle?.orderOut(nil); windowSpace.restore() }
     private func cycle(_ direction:Int) { guard Date().timeIntervalSince(lastCycle) > 0.55 else { return }; lastCycle = Date(); store.cycleCustom(direction:direction) }
     private func update() {
-        guard store.settings.mode != .nativeOnly,store.settings.showCustomDock,let profile = store.activeCustom else { panel?.orderOut(nil); handle?.orderOut(nil); timer?.invalidate(); timer = nil; windowSpace.restore(); return }
+        guard store.settings.mode != .nativeOnly,store.settings.showCustomDock,let profile = store.activeCustom else { WidgetPopoverCoordinator.shared.activeID = nil; panel?.orderOut(nil); handle?.orderOut(nil); timer?.invalidate(); timer = nil; visibilityTimerInterval = nil; pointerInteraction = false; edgeEnteredAt = nil; pointerAwaySince = nil; DockInteractionState.shared.endIfMouseReleased(); windowSpace.restore(); return }
+        let currentIDs = Set(profile.items.map(\.id))
+        let addedItems = displayedProfileID == profile.id && !currentIDs.subtracting(displayedItemIDs).isEmpty
+        displayedProfileID = profile.id; displayedItemIDs = currentIDs
+        var newlyCreated = false
         if panel == nil {
             let created = DockPanel(contentRect:.zero,styleMask:[.borderless,.nonactivatingPanel],backing:.buffered,defer:false)
             created.isFloatingPanel = true; created.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary,.stationary]
             created.backgroundColor = .clear; created.isOpaque = false; created.hasShadow = true; created.hidesOnDeactivate = false; created.isReleasedWhenClosed = false; created.title = "OpenDock Custom Dock"
-            created.contentView = NSHostingView(rootView:CustomDockView(openManager:openManager).environmentObject(store)); panel = created
+            created.contentView = NSHostingView(rootView:CustomDockView(openManager:openManager).environmentObject(store)); panel = created; newlyCreated = true
         }
         guard let panel,!NSScreen.screens.isEmpty else { return }
-        let screen = NSScreen.screens[min(store.settings.displayIndex,NSScreen.screens.count - 1)]
+        let screen = NSScreen.screens[max(0,min(store.settings.displayIndex,NSScreen.screens.count - 1))]
         let visible = store.settings.mode == .replacement ? screen.frame.insetBy(dx:0,dy:8) : screen.visibleFrame
         let icon = CGFloat(store.settings.iconSize) + 14
         let runningCount = store.settings.showRunningApps ? AppService.runningApps().filter { running in !profile.items.contains { $0.kind == .app && $0.target == running.target } }.count : 0
@@ -71,18 +90,25 @@ final class DockPanelController {
         if store.settings.position == .bottom {
             let length = profile.items.reduce(CGFloat(0)) { total,item in total + (item.kind == .widget ? 148:item.kind == .spacer ? 16:icon + 8) } + extra + 24
             let width = min(max(length,190),visible.width - 36)
-            frame = NSRect(x:visible.midX - width/2,y:visible.minY + 9,width:width,height:max(icon + 50,108))
+            let hasNames = profile.items.contains { $0.configuration["showName"] == "true" }
+            frame = NSRect(x:visible.midX - width/2,y:visible.minY + 9,width:width,height:max(icon + 58 + (hasNames ? 14:0),108))
         } else {
             let length = profile.items.reduce(CGFloat(0)) { total,item in total + (item.kind == .widget ? 76:item.kind == .spacer ? 18:icon + 8) } + extra + 45
             let height = min(max(length,160),visible.height - 50)
             frame = NSRect(x:store.settings.position == .left ? visible.minX + 9:visible.maxX - 175,y:visible.midY - height/2,width:166,height:height)
         }
         panel.level = store.settings.desktopWidget ? NSWindow.Level(rawValue:Int(CGWindowLevelForKey(.desktopIconWindow)) + 1):.floating
+        if panel.frame != frame { WidgetPopoverCoordinator.shared.activeID = nil }
         panel.setFrame(frame,display:true)
         configureHandle(screen)
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval:store.settings.autoHide ? 0.25:1,repeats:true) { [weak self] _ in Task { @MainActor in self?.checkVisibility() } }; timer?.tolerance = store.settings.autoHide ? 0.08:0.25
-        if store.settings.autoHide { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+        let interval:TimeInterval = store.settings.autoHide ? 0.25:1
+        if timer == nil || visibilityTimerInterval != interval {
+            timer?.invalidate(); visibilityTimerInterval = interval
+            timer = Timer.scheduledTimer(withTimeInterval:interval,repeats:true) { [weak self] _ in Task { @MainActor in self?.checkVisibility() } }; timer?.tolerance = store.settings.autoHide ? 0.08:0.25
+        }
+        // Resizing or editing the current layout must not repeatedly hide its panel.
+        if store.settings.autoHide { if newlyCreated { panel.orderOut(nil) } } else { panel.orderFrontRegardless() }
+        if addedItems { revealedUntil = Date().addingTimeInterval(2); panel.orderFrontRegardless(); handle?.orderOut(nil); pointerAwaySince = nil }
         checkVisibility()
     }
     private func configureHandle(_ screen:NSScreen) {
@@ -101,9 +127,12 @@ final class DockPanelController {
     }
     private func reveal() { revealedUntil = Date().addingTimeInterval(1.4); panel?.orderFrontRegardless(); handle?.orderOut(nil); pointerAwaySince = nil }
     private func checkVisibility() {
+        DockInteractionState.shared.endIfMouseReleased()
         guard let panel,store.settings.showCustomDock,store.settings.mode != .nativeOnly,!NSScreen.screens.isEmpty else { return }
-        let screen = NSScreen.screens[min(store.settings.displayIndex,NSScreen.screens.count - 1)]
-        if DesktopVisibility.missionControlVisible() || (store.settings.mode == .both && store.settings.hideWhenNativeDockShows && DesktopVisibility.nativeDockVisible()) { panel.orderOut(nil); handle?.orderOut(nil); windowSpace.restore(); return }
+        let screen = NSScreen.screens[max(0,min(store.settings.displayIndex,NSScreen.screens.count - 1))]
+        let mouseDown = NSEvent.pressedMouseButtons & 1 != 0
+        if !mouseDown { pointerInteraction = false }
+        if DesktopVisibility.missionControlVisible() || (store.settings.mode == .both && store.settings.hideWhenNativeDockShows && DesktopVisibility.nativeDockVisible()) { WidgetPopoverCoordinator.shared.activeID = nil; panel.orderOut(nil); handle?.orderOut(nil); edgeEnteredAt = nil; windowSpace.restore(); return }
         if store.settings.autoHide {
             let pointer = NSEvent.mouseLocation,f = screen.frame
             let atEdge:Bool
@@ -113,11 +142,13 @@ final class DockPanelController {
                 if edgeEnteredAt == nil { edgeEnteredAt = Date() }
                 if Date().timeIntervalSince(edgeEnteredAt!) >= 0.2 { reveal() }
             }
-            else if panel.frame.insetBy(dx:-18,dy:-18).contains(pointer) || hasPopover { pointerAwaySince = nil }
-            else if Date() > revealedUntil {
+            else {
                 edgeEnteredAt = nil
-                if pointerAwaySince == nil { pointerAwaySince = Date() }
-                if Date().timeIntervalSince(pointerAwaySince!) > 0.65 { panel.orderOut(nil); if store.settings.showHiddenHandle { handle?.orderFrontRegardless() } }
+                if panel.frame.insetBy(dx:-18,dy:-18).contains(pointer) || hasPopover || (mouseDown && (pointerInteraction || DockInteractionState.shared.dragging || DockInteractionState.shared.resizing)) { pointerAwaySince = nil }
+                else if Date() > revealedUntil {
+                    if pointerAwaySince == nil { pointerAwaySince = Date() }
+                    if Date().timeIntervalSince(pointerAwaySince!) > 0.65 { panel.orderOut(nil); if store.settings.showHiddenHandle { handle?.orderFrontRegardless() } }
+                }
             }
         } else { panel.orderFrontRegardless(); handle?.orderOut(nil) }
         if Date().timeIntervalSince(lastReservation) > 1 {

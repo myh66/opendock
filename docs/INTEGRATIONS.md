@@ -1,6 +1,39 @@
 # 外部数据连接
 
-OpenDock 的收入、行情和 AI 组件读取真实来源。未连接、权限不足、网络失败或不认识的响应显示明确错误，保留上次成功的数据。测试使用人工构造的数值 fixture；没有使用本机私人账户、商业密钥或个人 AI 登录进行端到端验证。
+OpenDock 的收入、行情和 AI 组件读取真实来源。未连接、权限不足、网络失败或不认识的响应显示明确错误；缓存和部分结果按各组件的说明处理。测试使用人工构造的数值 fixture；没有使用本机私人账户、商业密钥、IBKR 账户或个人 AI 登录进行端到端验证。
+
+## 本机服务与客户端入口
+
+0.3.0 Beta 1 增加下列四种入口；它们读取的状态与可执行的操作各不相同。
+
+| 入口 | 实际能力 | 连接与保存 |
+| --- | --- | --- |
+| Ollama | 本机服务版本、已安装模型、内存中模型及服务报告的内存／释放时间 | 手动连接和刷新；服务地址随布局保存，不需要密钥。读取结果只在运行时内存中保留。 |
+| IBKR | 本机 Client Portal Gateway 返回的账户、净资产／现金／未实现盈亏、持仓列表 | 手动连接和刷新；Gateway 地址、账户 ID 与金额显隐设置随布局保存，账本和持仓只保留在内存。 |
+| 网易云音乐 | 已安装／运行状态，主动启动客户端，打开用户收藏的官方音乐链接 | 收藏名称与 `music.163.com` 链接随布局保存；不读取账户、歌曲记录或播放器内部数据库。 |
+| Shadowrocket | 已安装／运行状态，以及 macOS 公布的系统代理摘要 | 明确点击才打开客户端或系统设置；显示设置随布局保存，代理摘要只在内存中。 |
+
+### Ollama
+
+先自行安装并运行 Ollama，在组件中输入服务根地址，例如 `http://127.0.0.1:11434`，点击连接或刷新。支持 `127.0.0.1`、`localhost`、`[::1]` 的 HTTP／HTTPS；不接受远端地址、认证信息、其他路径、查询参数或 fragment，重定向会被拒绝。HTTPS 仍使用系统证书校验。
+
+组件只发出 `GET /api/version`、`GET /api/tags`、`GET /api/ps`。模型名称、大小和状态来自服务响应；未知值显示不可用。关闭弹窗取消未完成的读取，重新打开不会自动访问服务。没有聊天、生成、模型下载／删除或云端额度功能。接口依据：[官方模型列表](https://docs.ollama.com/api/tags)、[运行中模型](https://docs.ollama.com/api/ps)、[官方 API 版本接口](https://github.com/ollama/ollama/blob/main/docs/api.md#version)。
+
+### IBKR
+
+先自行运行并登录 **Client Portal Gateway**，为本机 HTTPS 配置受系统信任且匹配主机名的证书。组件默认地址为 `https://localhost:5000/v1/api`；只接受本机回环 HTTPS，以及根路径或 `/v1/api` 路径。TWS／IB Gateway 的 TCP API 端口不适用。未被系统信任的默认自签名证书会被拒绝，OpenDock 不跳过证书校验或自动信任证书。
+
+点击「连接并刷新」后，先读取 `/portfolio/accounts`，再读取所选账户的 `/portfolio/{accountId}/ledger` 与 `/portfolio/{accountId}/positions/{page}`。账本使用服务提供的 `BASE` 汇总；缺失时显示不可用，不把单个币种的账本当作账户总额，也不把不同币种直接相加。持仓最多读取 10 页；遇到重复页、分页上限或后续读取失败时保留已收到的项目并标明可能不完整。
+
+组件默认隐藏金额与持仓份额，账户 ID 在界面遮盖；**真实账户 ID 仍属于配置，导出 JSON 会包含它**。它不保存用户名、密码、token 或 Gateway 会话，也不执行登录、交易、会话保活或行情订阅。重新启动应用后需要重新读取；尚未使用真实 IBKR 账户验证。接口依据：[官方 Gateway/API 说明](https://www.interactivebrokers.com/docs/web-api/v1/endpoints/introduction)、[账户列表](https://www.interactivebrokers.com/docs/web-api/api-reference/trading/trading-portfolio/get-all-accounts)、[Portfolio 查询口径](https://www.interactivebrokers.com/campus/ibkr-api-page/web-api-trading/)。
+
+### 网易云音乐
+
+组件识别本机客户端安装／运行状态，点击启动或激活应用。可收藏用户选择的官方 HTTPS 歌曲、歌单、专辑、艺人链接，点击才交给系统打开。它不是「正在播放」数据源：不显示当前曲目、歌词、播放进度或播放／暂停控制，不调用未知私有 API。客户端播放能力与登录由网易云自身提供，入口见 [网易云音乐](https://music.163.com/)。
+
+### Shadowrocket
+
+客户端是否运行来自公开的应用／进程信息；系统代理摘要来自 macOS `SCDynamicStoreCopyProxies`。页面展示的是系统公开的代理设置，**代理启用不等于 Shadowrocket 已连接**；VPN 状态、节点、流量与延迟不可用。它不修改代理、启停 VPN、切换节点，也不读取 Shadowrocket 配置、订阅或密钥；没有网络连通测试或供应商 HTTP 请求。代理服务器信息及 PAC 地址不写入布局导出。客户端与系统设置均在点击后打开，参考 [官方 App Store 页面](https://apps.apple.com/us/app/shadowrocket/id932747118) 与 [Apple 系统代理 API](https://developer.apple.com/documentation/systemconfiguration/scdynamicstorecopyproxies(_:))。
 
 ## 商业账号
 

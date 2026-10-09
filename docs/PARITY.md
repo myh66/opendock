@@ -1,6 +1,6 @@
 # Dockset 0.2.6 功能对照与验证边界
 
-对照日期：2026-10-08。范围来自 [Dockset 官网](https://dockset.app/)、[截至 0.2.6 的 changelog](https://dockset.app/changelog) 和公开手册。OpenDock 是独立的 MIT 开源实现，使用自己的名称、图标和 SwiftUI 界面；此表不表示获得 Dockset 官方授权，也不表示逐像素一致。
+对照日期：2026-10-09。范围来自 [Dockset 官网](https://dockset.app/)、[截至 0.2.6 的 changelog](https://dockset.app/changelog) 和公开手册。OpenDock 是独立的 MIT 开源实现，使用自己的名称、图标和 SwiftUI 界面；此表不表示获得 Dockset 官方授权，也不表示逐像素一致。
 
 本表是当前扩展版的逐项对照基准；概览见 `FEATURES.md`，验证按 `VERIFICATION.md` 的版本/阶段判断。早期 0.1.0 Beta 结果不能替代本次扩展版验证。
 
@@ -43,11 +43,11 @@
 | 应用打开/激活/退出 | `implemented` | 公共 NSWorkspace/NSRunningApplication；真实应用行为未逐一验证。 |
 | Calendar 当天图标 | `source tested` | 动态绘制日期 fixture 通过；跨午夜持续刷新待运行验证。 |
 | 登录启动 | `implemented` | SMAppService mainApp 注册/取消；未实际启用。 |
-| 首次引导/重播 | `implemented` | 三步引导、持久完成状态、设置中重开。 |
+| 首次引导/重播 | `implemented` | 三步引导暂存模式/组件，完成才应用；跳过保留设置，重播默认不新建布局。 |
 | 设置/关于页面记忆 | `implemented` | 管理器页面持久保存。 |
 | URL 自动化 | `source tested` | `opendock://profile/<UUID或编码名称>`；fixture 验证只允许 custom，拒绝 native。 |
 | macOS Focus Filter | `implemented` | SetFocusFilterIntent 关联两类布局；实际注册和系统触发待验证。 |
-| 自定义全局快捷键 | `implemented` | Carbon；至少两个修饰键，可清除/检查冲突；不需要输入监控。 |
+| 自定义全局快捷键 | `implemented` | Carbon；至少两个修饰键，内联冲突/修饰键提示；录制时暂停全局快捷键，失焦/Escape取消，不需要输入监控。 |
 | 两指方向/⌘ 滚动切换 | `implemented` | 仅 Dock 范围处理，随边缘调整方向并节流；普通滚轮用于 overflow。 |
 
 ## 模式、外观与窗口
@@ -59,7 +59,7 @@
 | 原生/替换/并用三模式 | `implemented` | 替换保存 autohide 三键快照；模式设置已有，未实际改变系统 Dock。 |
 | 退出/取消替换恢复 | `implemented` | 恢复保存原值和原缺失键；真实 restore/restart 未执行，不承诺已实测。 |
 | 左/底/右、显示器、尺寸 | `implemented` | 设置及可拖动尺寸把手；长度适配屏幕，单个 Custom Dock。 |
-| Frosted/Clear/Liquid Glass | `implemented` | 默认 Frosted；Glass 有版本降级，尊重减少透明度/动态效果。 |
+| Frosted/Clear/Liquid Glass | `implemented` | 新布局默认 Liquid Glass；管理/设置/弹窗控件使用原生玻璃，阅读区域为稳定卡片；旧 SDK/系统降级，尊重明暗/减少透明度/动态效果。 |
 | 图标放大 | `implemented` | hover scale，Reduce Motion 时跳过。 |
 | 自动隐藏/隐藏把手 | `implemented` | 到边缘显示、离开延迟；弹窗开启时保持可见。 |
 | 桌面组件模式 | `implemented` | 普通应用窗口后方的窗口层级。 |
@@ -110,6 +110,10 @@
 | Shopify | `implemented · account required` | OAuth+GraphQL 当前订单金额/数目/AOV/商品/来源；分页不足报错，来源不冒充访客流量。 |
 | AI Limits | `implemented · account required` | 七 provider，共享连接、Numbers/Rings/Bars、Used/Remaining、顺序与首选额度。 |
 | AI Activity | `implemented · account required` | Today/L7/L30/MTD，独立 Limits，本地/账号来源和估算说明。 |
+| 网易云音乐（扩展） | `implemented` | 客户端安装/运行/启动与官方链接收藏；没有曲目信息或播放控制。 |
+| IBKR（扩展） | `implemented · account required` | 本机可信 HTTPS Client Portal Gateway，手动只读账户/BASE账本/最多10页持仓；默认隐藏金额，未连接实号。 |
+| Ollama（扩展） | `implemented` | loopback官方 version/tags/ps 手动采样，展示安装/内存模型、大小与释放期限；不生成/下载/加载模型。 |
+| Shadowrocket（扩展） | `implemented` | 安装/运行/启动与系统代理只读摘要；代理状态不等于隧道连接，不切换网络/读取订阅。 |
 | 组件复制/稳定弹窗/滚动 | `implemented` | 独立 ID、设置保留、同一项再次关闭、ScrollView、Escape/⌘W；时钟/AI 弹窗关闭流程已有 UI 证据，其余组件及多屏定位仍待实际验证。 |
 | 减少闲置查询/重绘 | `implemented` | 系统 shared lease 最后组件卸载停止；暂停 timeline 不每秒重绘；未性能基准。 |
 
@@ -142,6 +146,10 @@
 | 取消 provider Show 断开 bridge | `implemented` | Claude/Antigravity 取消显示时恢复旧 bridge（匹配才恢复），Claude Desktop 内存读取停止。 |
 | AI Activity 三种独立视图 | `implemented` | Sparkline/Bars/Totals，provider 及时间范围独立。 |
 | 股票拖动读值 | `implemented` | hover 检查价格；拖动吸附原始观测两端，比较金额、百分比与跨度，按时间先后处理反向拖动；支持键盘日期选择，4 项 fixture 通过。 |
+| 添加组件定位 | `implemented` | Picker添加即关闭；活动Dock短暂显现、滚动到新项目并描边；停用动画时静态反馈。 |
+| 跨布局拖拽与取消 | `implemented` | 结构化身份解析当前数据，同布局稳定排序，跨布局独立复制；松开鼠标收尾，原生布局拒绝非应用/分隔符。 |
+| 连接设置草稿 | `implemented` | 商业账户名称/域名/模式与天气搜索保留，密钥不写入布局；再次打开恢复设置区域。 |
+| 股票页签和曲目信息 | `implemented` | 横向全宽股票页签/名称开Yahoo，长艺人信息延时往返滚动，Reduce Motion静态。 |
 | 全屏边缘 dwell | `implemented` | 已有 0.2 秒边缘计时；真实全屏/原生 Dock 优先级仍待运行验证。 |
 | 任意 Space 确定跳转 | `unavailable` | 公共 AX 激活为尽力恢复，不使用 private SkyLight/CGS。 |
 | Apple WidgetKit 导入 | `unavailable` | 与公开产品范围一样，只支持内置组件。 |

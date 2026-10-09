@@ -87,6 +87,8 @@ struct IntegrationWidgetTile:View {
         self.item = item; self.compact = compact; self.onUpdate = onUpdate
         _runtime = StateObject(wrappedValue:IntegrationRuntime.forItem(item.id))
         _config = State(initialValue:item.configuration)
+        _setup = State(initialValue:item.configuration["widgetSetupOpen"] == "true")
+        _aiProvider = State(initialValue:AIProvider(rawValue:item.configuration["draftAIProvider"] ?? "codex") ?? .codex)
     }
     private var kind:WidgetKind { item.widget ?? .stock }
     private var business:Bool { [.stripe,.paddle,.shopify].contains(kind) }
@@ -121,12 +123,18 @@ struct IntegrationWidgetTile:View {
                 if kind == .aiLimits,!tileLimits.isEmpty { limitTile }
                 else if kind == .aiActivity,!activityRecords.isEmpty,config["activityStyle"] != "totals" { activityTile }
                 else { HStack(spacing:8) { Image(systemName:kind.symbol).font(.system(size:19)).foregroundStyle(accent); VStack(alignment:.leading,spacing:3) { Text(summary).font(.system(size:12,weight:.semibold)).lineLimit(1).minimumScaleFactor(0.65); Text(subtitle).font(.system(size:9)).foregroundStyle(.secondary).lineLimit(1) }; Spacer(minLength:0) } }
-            }.padding(.horizontal,11).frame(width:compact ? 132:140,height:58).background(accent.opacity(0.09),in:RoundedRectangle(cornerRadius:14))
+            }.padding(.horizontal,11).frame(width:compact ? 132:140,height:58).dockGlass(cornerRadius:14,tint:accent.opacity(0.09),interactive:true)
         }.buttonStyle(.plain).help(title).accessibilityElement(children:.ignore).accessibilityLabel(title).accessibilityValue(summary).accessibilityAddTraits(.isButton)
         .popover(isPresented:$presented,arrowEdge:compact ? .leading:.bottom) { popover }
         .onChange(of:presented) { open in if open { coordinator.activeID = item.id } else if coordinator.activeID == item.id { coordinator.activeID = nil } }
         .onChange(of:coordinator.activeID) { id in if id != item.id { presented = false } }
         .onChange(of:item.configuration) { value in if config != value { config = value } }
+        .onChange(of:setup) { set("widgetSetupOpen",String($0)) }
+        .onChange(of:aiProvider) { provider in
+            set("draftAIProvider",provider.rawValue); secret = ""
+            let connection = AIAdapters.connection(provider)
+            clientID = provider == .cursor ? connection.memberEmail ?? "":connection.username ?? ""
+        }
         .task(id:refreshKey) {
             await runtime.refresh(kind:kind,config:config,explicit:false)
             guard config["autoRefresh"] != "false" else { return }
@@ -173,8 +181,10 @@ struct IntegrationWidgetTile:View {
     }
     private var popover:some View {
         VStack(spacing:0) {
-            HStack { Label(title,systemImage:kind.symbol).font(.headline); Spacer(); Button { Task { await runtime.refresh(kind:kind,config:config,explicit:true) } } label: { Image(systemName:"arrow.clockwise") }.disabled(runtime.busy); Button { setup.toggle() } label: { Image(systemName:setup ? "chart.xyaxis.line":"gearshape") }; Button { presented = false } label: { Image(systemName:"xmark") } }.buttonStyle(.plain).padding(18)
-            Divider()
+            WidgetPopoverHeader(title:title,symbol:kind.symbol,tint:accent,subtitle:setup ? "自定义与连接":kind.category,onClose:{presented = false}) {
+                WidgetPopoverIconButton(symbol:"arrow.clockwise",label:"刷新") { Task { await runtime.refresh(kind:kind,config:config,explicit:true) } }.disabled(runtime.busy)
+                WidgetPopoverIconButton(symbol:setup ? "chart.xyaxis.line":"gearshape",label:setup ? "查看数据":"自定义组件",prominent:setup) { setup.toggle() }
+            }.padding(.bottom,12)
             ScrollView {
                 VStack(alignment:.leading,spacing:16) {
                     if setup { setupView }
@@ -183,9 +193,11 @@ struct IntegrationWidgetTile:View {
                     else { aiView }
                     if runtime.busy { HStack { ProgressView().controlSize(.small); Text("正在刷新，保留上次成功的数据…").font(.caption).foregroundStyle(.secondary) } }
                     if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
-                }.padding(18)
+                }.padding(16).frame(maxWidth:.infinity,alignment:.leading).dockCard(cornerRadius:16)
             }
-        }.frame(width:490,height:600).onExitCommand { presented = false }
+        }.padding(14).frame(width:490,height:600).dockCard(cornerRadius:22)
+            .buttonStyle(DockGlassButtonStyle()).onExitCommand { presented = false }
+            .background { Button("关闭小组件") { presented = false }.keyboardShortcut("w",modifiers:.command).frame(width:0,height:0).opacity(0).accessibilityHidden(true) }
     }
     @ViewBuilder private var setupView:some View {
         TextField("组件名称",text:configBinding("title",default:title)).textFieldStyle(.roundedBorder)
@@ -209,7 +221,7 @@ struct IntegrationWidgetTile:View {
                 Text(report.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                 Text("更新于 " + report.fetchedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption2).foregroundStyle(.secondary)
                 if kind == .shopify { breakdown("商品剩余数量",values:currency.products); breakdown("订单来源",values:currency.channels) }
-            } else { Button("连接 \(kind.title)…") { setup = true }.buttonStyle(.borderedProminent) }
+            } else { Button("连接 \(kind.title)…") { setup = true }.buttonStyle(DockGlassButtonStyle(prominent:true)) }
             if let error = runtime.errors["business"] { Text(error).font(.caption).foregroundStyle(.orange) }
         }
     }
@@ -238,7 +250,7 @@ struct IntegrationWidgetTile:View {
                 if kind == .paddle { Toggle("Sandbox",isOn:boolBinding("sandbox",default:false)) }
                 Text(kind == .stripe ? "Restricted key：Balance + Subscriptions 仅 Read；不需要完整 secret key。":"Paddle Billing API key：metrics.read。环境须与密钥前缀一致。").font(.caption).foregroundStyle(.secondary)
             }
-            HStack { Button(connecting ? "正在验证…":"验证并连接") { Task { await connectBusiness() } }.buttonStyle(.borderedProminent).disabled(secret.isEmpty || connecting); if connecting { ProgressView().controlSize(.small) } }
+            HStack { Button(connecting ? "正在验证…":"验证并连接") { Task { await connectBusiness() } }.buttonStyle(DockGlassButtonStyle(prominent:true)).disabled(secret.isEmpty || connecting); if connecting { ProgressView().controlSize(.small) } }
         }.onAppear { accountName = config["draftAccountName"] ?? ""; domain = config["draftDomain"] ?? "" }
     }
     private func renameAccount(_ account:IntegrationAccount,name:String) { var updated = selectedAccount ?? account; updated.name = String(name.prefix(120)); saveAccount(updated) }
@@ -258,10 +270,13 @@ struct IntegrationWidgetTile:View {
         VStack(alignment:.leading,spacing:14) {
             if symbols.isEmpty { stockSetup }
             else {
-                if kind == .watchlist { ForEach(symbols,id:\.self) { code in Button { set("selectedSymbol",code) } label: { HStack { Text(code).fontWeight(.semibold); Spacer(); Text(runtime.stocks[code]?.current?.formatted(.number.precision(.fractionLength(2))) ?? "—") } }.buttonStyle(.plain) } }
-                HStack { Picker("股票",selection:configBinding("selectedSymbol",default:symbols.first ?? "")) { ForEach(symbols,id:\.self) { Text($0).tag($0) } }; Picker("范围",selection:configBinding("range",default:"1mo")) { ForEach(StockAdapters.ranges,id:\.self) { Text($0.uppercased()).tag($0) } } }
+                stockTabs
+                Picker("图表范围",selection:configBinding("range",default:"1mo")) { ForEach(StockAdapters.ranges,id:\.self) { Text($0.uppercased()).tag($0) } }
                 if let report = selectedStock {
-                    Text(report.name).font(.headline)
+                    if let url = yahooURL(report.symbol) {
+                        Link(destination:url) { HStack(spacing:6) { Text(stockName(report)).font(.headline); Image(systemName:"arrow.up.right").font(.caption) } }
+                            .buttonStyle(.plain).help("在 Yahoo Finance 打开 " + report.symbol).accessibilityLabel(stockName(report) + "，在 Yahoo Finance 打开")
+                    } else { Text(stockName(report)).font(.headline) }
                     Text(report.current.map { $0.formatted(.number.precision(.fractionLength(2))) + " " + report.currency } ?? "—").font(.system(size:30,weight:.semibold))
                     if config["compare"] == "true",runtime.stocks.count > 1 { Text("多股票相对变化").font(.caption.weight(.semibold)); comparisonChart }
                     StockHistoryChart(report:report,dither:config["dither"] == "true",showVolume:config["showVolume"] != "false")
@@ -277,7 +292,7 @@ struct IntegrationWidgetTile:View {
         VStack(alignment:.leading,spacing:12) {
             HStack { TextField("搜索股票 / 交易代码",text:$query).textFieldStyle(.roundedBorder).onChange(of:query) { set("draftStockSearch",$0) }; Button("搜索") { Task { await searchStock() } } }
             ForEach(matches) { match in Button { addSymbol(match.symbol); matches = [] } label: { HStack { Text(match.symbol).fontWeight(.semibold); Text(match.name).foregroundStyle(.secondary); Spacer(); Image(systemName:"plus") } }.buttonStyle(.plain) }
-            ForEach(symbols,id:\.self) { code in HStack { Text(code); Spacer(); Button { let remaining = symbols.filter { $0 != code }; set("symbols",remaining.joined(separator:",")); if config["selectedSymbol"] == code { set("selectedSymbol",remaining.first ?? "") } } label: { Image(systemName:"minus.circle") }.buttonStyle(.plain) } }
+            ForEach(symbols,id:\.self) { code in HStack { Text(code).font(.caption.weight(.semibold)).frame(width:65,alignment:.leading); TextField("显示名称",text:configBinding("stockName-" + code,default:runtime.stocks[code]?.name ?? code)).textFieldStyle(.roundedBorder); Button { let remaining = symbols.filter { $0 != code }; set("symbols",remaining.joined(separator:",")); if config["selectedSymbol"] == code { set("selectedSymbol",remaining.first ?? "") } } label: { Image(systemName:"minus.circle").frame(width:24,height:24) }.buttonStyle(.plain).help("移除 " + code) } }
             Picker("行情来源",selection:configBinding("stockProvider",default:"yahoo")) { Text("Yahoo Finance 公开数据").tag("yahoo"); Text("Alpha Vantage").tag("alpha") }
             if config["stockProvider"] == "alpha" {
                 SecureField("Alpha Vantage API key",text:$secret).textFieldStyle(.roundedBorder)
@@ -292,6 +307,26 @@ struct IntegrationWidgetTile:View {
     private func searchStock() async {
         do { let key = try IntegrationKeychain.read(account:"stock-alpha",allowPrompt:true)?["key"]; matches = try await StockAdapters.search(query,provider:config["stockProvider"] ?? "yahoo",key:key).map { StockMatch(symbol:$0.0,name:$0.1) }; if matches.isEmpty { status = "没有匹配结果。" } }
         catch { status = error.localizedDescription }
+    }
+    @ViewBuilder private var stockTabs:some View {
+        if symbols.count <= 4 { HStack(spacing:8) { ForEach(symbols,id:\.self) { stockTab($0) } } }
+        else { ScrollView(.horizontal,showsIndicators:false) { HStack(spacing:8) { ForEach(symbols,id:\.self) { stockTab($0).frame(width:106) } }.padding(.vertical,2) } }
+    }
+    private func stockTab(_ symbol:String)->some View {
+        let selected = (selectedStock?.symbol ?? config["selectedSymbol"] ?? symbols.first ?? "") == symbol
+        return Button { set("selectedSymbol",symbol) } label: {
+            VStack(alignment:.leading,spacing:3) {
+                HStack { Text(symbol).font(.system(size:12,weight:.semibold)).lineLimit(1); Spacer(minLength:0); if selected { Image(systemName:"checkmark").font(.system(size:9,weight:.semibold)) } }
+                Text(runtime.stocks[symbol]?.current?.formatted(.number.precision(.fractionLength(2))) ?? "尚未读取").font(.caption2).opacity(0.8).lineLimit(1)
+            }.padding(.horizontal,12).padding(.vertical,9).frame(maxWidth:.infinity,alignment:.leading)
+                .foregroundStyle(selected ? Color.white:DockTheme.ink).dockGlass(cornerRadius:12,tint:selected ? DockTheme.accent:nil,interactive:true)
+        }.buttonStyle(.plain).accessibilityLabel("选择股票 " + symbol).accessibilityValue(selected ? "已选中":"")
+    }
+    private func stockName(_ report:StockReport)->String { config["stockName-" + report.symbol]?.trimmingCharacters(in:.whitespacesAndNewlines).nonempty ?? report.name }
+    private func yahooURL(_ symbol:String)->URL? {
+        guard StockAdapters.validSymbol(symbol) else { return nil }
+        var components = URLComponents(); components.scheme = "https"; components.host = "finance.yahoo.com"; components.path = "/quote/" + symbol + "/"
+        return components.url
     }
     private func addSymbol(_ symbol:String) {
         var selected = kind == .stock ? []:symbols
@@ -316,7 +351,7 @@ struct IntegrationWidgetTile:View {
                     if let error = runtime.errors[provider.rawValue], error != IntegrationError.noData.localizedDescription { Text(error).font(.caption).foregroundStyle(.orange) }
                 }.padding(14).background(.secondary.opacity(0.06),in:RoundedRectangle(cornerRadius:12))
             }
-            if providers.isEmpty { Button("选择 AI 服务") { setup = true }.buttonStyle(.borderedProminent) }
+            if providers.isEmpty { Button("选择 AI 服务") { setup = true }.buttonStyle(DockGlassButtonStyle(prominent:true)) }
         }
     }
     private func chosenLimit(_ report:AIReport)->AIAllowance? { report.allowances.first(where:{$0.id == config["limit-" + report.provider.rawValue]}) ?? report.allowances.first }

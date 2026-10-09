@@ -13,6 +13,7 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
     case clock, worldClock, calendar, reminders, focus, note, battery, system, weather
     case stopwatch, countdown, hydration, timeProgress, shortcut, nowPlaying, airDrop
     case alarm, network, stock, watchlist, stripe, paddle, shopify, aiLimits, aiActivity
+    case neteaseMusic, ibkr, ollama, shadowrocket
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -41,6 +42,10 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .shopify: return "Shopify"
         case .aiLimits: return "AI 额度"
         case .aiActivity: return "AI 活动"
+        case .neteaseMusic: return "网易云音乐"
+        case .ibkr: return "IBKR"
+        case .ollama: return "Ollama"
+        case .shadowrocket: return "Shadowrocket"
         }
     }
     var symbol: String {
@@ -69,16 +74,20 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .shopify: return "bag"
         case .aiLimits: return "gauge.with.dots.needle.50percent"
         case .aiActivity: return "sparkles"
+        case .neteaseMusic: return "music.note.list"
+        case .ibkr: return "chart.bar.xaxis"
+        case .ollama: return "cpu"
+        case .shadowrocket: return "paperplane"
         }
     }
     var category: String {
         switch self {
         case .clock, .worldClock, .stopwatch, .countdown, .timeProgress, .alarm: return "时间"
         case .focus, .note, .hydration, .calendar, .reminders: return "效率"
-        case .battery, .system, .network: return "系统"
-        case .weather, .nowPlaying, .shortcut, .airDrop: return "生活"
-        case .stock, .watchlist, .stripe, .paddle, .shopify: return "商业"
-        case .aiLimits, .aiActivity: return "AI"
+        case .battery, .system, .network, .shadowrocket: return "系统"
+        case .weather, .nowPlaying, .shortcut, .airDrop, .neteaseMusic: return "生活"
+        case .stock, .watchlist, .stripe, .paddle, .shopify, .ibkr: return "商业"
+        case .aiLimits, .aiActivity, .ollama: return "AI"
         }
     }
     var detail: String {
@@ -108,6 +117,10 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .shopify: return "连接店铺，查看订单与销售。"
         case .aiLimits: return "查看已连接 AI 提供方的额度与重置时间。"
         case .aiActivity: return "查看本地 AI 活动、会话和令牌历史。"
+        case .neteaseMusic: return "打开网易云客户端，收藏官方歌曲与歌单链接。"
+        case .ibkr: return "连接本机网关，只读查看账户余额和持仓。"
+        case .ollama: return "查看本地 Ollama 模型、运行状态与内存占用。"
+        case .shadowrocket: return "查看客户端状态与系统代理，打开 Shadowrocket。"
         }
     }
 }
@@ -167,7 +180,7 @@ enum DockMaterial: String, Codable, CaseIterable, Identifiable {
 
 struct DockSettings: Codable, Equatable {
     var position: DockPosition = .right
-    var material: DockMaterial = .frosted
+    var material: DockMaterial = .liquidGlass
     var iconSize: Double = 44
     var autoHide: Bool = false
     var showRunningApps: Bool = true
